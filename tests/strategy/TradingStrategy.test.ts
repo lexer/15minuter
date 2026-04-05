@@ -80,14 +80,17 @@ describe('TradingStrategy', () => {
       expect(signal.suggestedContracts).toBeGreaterThan(0);
     });
 
-    it('returns hold when probability is below entry threshold', () => {
-      const market = makeMarket({ winProbability: 0.85 });
+    it('returns hold when ask is below entry threshold even if model says >90%', () => {
+      // Market not confirming — ask 85¢ < 90¢ threshold
+      const market = makeMarket({ winProbability: 0.95, yesAsk: 0.85 });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
+      expect(signal.reason).toMatch(/market not confirming/);
     });
 
-    it('returns hold at exactly the threshold', () => {
-      const market = makeMarket({ winProbability: ENTRY_PROBABILITY_THRESHOLD });
+    it('returns hold at exactly the ask threshold', () => {
+      // ask == threshold (not strictly above) → hold
+      const market = makeMarket({ winProbability: 0.97, yesAsk: ENTRY_PROBABILITY_THRESHOLD });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
     });
@@ -112,7 +115,7 @@ describe('TradingStrategy', () => {
     });
 
     it('caps contracts at MAX_CONTRACTS_PER_TRADE', () => {
-      const market = makeMarket({ winProbability: 0.99, yesAsk: 0.01 });
+      const market = makeMarket({ winProbability: 0.99, yesAsk: 0.91 });
       const signal = strategy.evaluateEntry(market, 10_000_000);
       expect(signal.suggestedContracts).toBeLessThanOrEqual(50);
     });

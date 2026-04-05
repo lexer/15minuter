@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.15.0] — 2026-04-05
+
+### Changed
+- `TradingStrategy.evaluateEntry`: entry trigger changed from model win probability to Kalshi ask price crossing 90¢. Model is retained for Kelly edge validation (`model_prob > ask`). This requires market confirmation before entering — avoids trades where the model fires but the market disagrees (e.g. market has info the score model doesn't).
+- Updated tests: replaced "probability below threshold" tests with ask-crossing semantics
+
 ## [1.14.0] — 2026-04-05
 
 ### Added

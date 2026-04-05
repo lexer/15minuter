@@ -63,10 +63,11 @@ export class TradingStrategy {
       return { action: 'hold', reason: `Market not tradeable (status=${market.status})`, market };
     }
 
-    if (market.winProbability <= ENTRY_PROBABILITY_THRESHOLD) {
+    // Market ask must cross 90¢ first (momentum trigger); model edge is validated below via Kelly
+    if (market.yesAsk <= ENTRY_PROBABILITY_THRESHOLD) {
       return {
         action: 'hold',
-        reason: `Win probability ${(market.winProbability * 100).toFixed(1)}% below entry threshold ${ENTRY_PROBABILITY_THRESHOLD * 100}%`,
+        reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ below entry threshold ${ENTRY_PROBABILITY_THRESHOLD * 100}¢ — market not confirming`,
         market,
       };
     }
