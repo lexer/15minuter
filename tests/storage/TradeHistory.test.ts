@@ -1,8 +1,9 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { TradeHistory, TradeRecord } from '../../src/storage/TradeHistory';
 
-const HISTORY_FILE = path.resolve(process.cwd(), 'trade_history.json');
+let tempFile: string;
 
 function makeRecord(id: string): TradeRecord {
   return {
@@ -21,35 +22,35 @@ function makeRecord(id: string): TradeRecord {
 
 describe('TradeHistory', () => {
   beforeEach(() => {
-    if (fs.existsSync(HISTORY_FILE)) fs.unlinkSync(HISTORY_FILE);
+    tempFile = path.join(os.tmpdir(), `trade_history_test_${Date.now()}.json`);
   });
 
   afterEach(() => {
-    if (fs.existsSync(HISTORY_FILE)) fs.unlinkSync(HISTORY_FILE);
+    if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
   });
 
   it('starts with empty history', () => {
-    const h = new TradeHistory();
+    const h = new TradeHistory(tempFile);
     expect(h.getAllTrades()).toHaveLength(0);
     expect(h.getOpenTrades()).toHaveLength(0);
   });
 
   it('records a trade and persists to disk', () => {
-    const h = new TradeHistory();
+    const h = new TradeHistory(tempFile);
     h.recordTrade(makeRecord('trade-1'));
     expect(h.getAllTrades()).toHaveLength(1);
-    expect(fs.existsSync(HISTORY_FILE)).toBe(true);
+    expect(fs.existsSync(tempFile)).toBe(true);
   });
 
   it('loads persisted trades on construction', () => {
-    const h1 = new TradeHistory();
+    const h1 = new TradeHistory(tempFile);
     h1.recordTrade(makeRecord('trade-1'));
-    const h2 = new TradeHistory();
+    const h2 = new TradeHistory(tempFile);
     expect(h2.getAllTrades()).toHaveLength(1);
   });
 
   it('updates a trade with exit data', () => {
-    const h = new TradeHistory();
+    const h = new TradeHistory(tempFile);
     h.recordTrade(makeRecord('trade-1'));
     h.updateTrade('trade-1', { pnl: 0.5, exitTime: new Date().toISOString() });
     const trade = h.getAllTrades()[0];
@@ -58,7 +59,7 @@ describe('TradeHistory', () => {
   });
 
   it('getOpenTrades returns only trades without exitTime', () => {
-    const h = new TradeHistory();
+    const h = new TradeHistory(tempFile);
     h.recordTrade(makeRecord('trade-1'));
     h.recordTrade(makeRecord('trade-2'));
     h.updateTrade('trade-1', { exitTime: new Date().toISOString() });
@@ -67,7 +68,7 @@ describe('TradeHistory', () => {
   });
 
   it('computes summary correctly', () => {
-    const h = new TradeHistory();
+    const h = new TradeHistory(tempFile);
     h.recordTrade(makeRecord('trade-1'));
     h.recordTrade(makeRecord('trade-2'));
     h.updateTrade('trade-1', { pnl: 1.0 });

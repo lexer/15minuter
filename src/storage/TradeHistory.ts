@@ -39,18 +39,20 @@ export interface CompletedGame {
   completedAt: string;
 }
 
-const HISTORY_FILE = path.resolve(process.cwd(), 'trade_history.json');
+const DEFAULT_HISTORY_FILE = path.resolve(process.cwd(), 'trade_history.json');
 
 export class TradeHistory {
   private data: TradeHistoryData;
+  private readonly filePath: string;
 
-  constructor() {
+  constructor(filePath: string = DEFAULT_HISTORY_FILE) {
+    this.filePath = filePath;
     this.data = this.load();
   }
 
   private load(): TradeHistoryData {
-    if (fs.existsSync(HISTORY_FILE)) {
-      const raw = fs.readFileSync(HISTORY_FILE, 'utf-8');
+    if (fs.existsSync(this.filePath)) {
+      const raw = fs.readFileSync(this.filePath, 'utf-8');
       return JSON.parse(raw) as TradeHistoryData;
     }
     return {
@@ -63,7 +65,7 @@ export class TradeHistory {
   }
 
   private save(): void {
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(this.data, null, 2), 'utf-8');
+    fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
   }
 
   recordTrade(trade: TradeRecord): void {

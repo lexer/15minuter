@@ -3,7 +3,12 @@ import { BasketballMarket } from '../services/MarketService';
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;
 export const MAX_CONTRACTS_PER_TRADE = 10;
-export const MAX_COST_PER_TRADE_CENTS = 5_000; // $50 max per trade
+
+// Quarter-Kelly: risk this fraction of balance per trade, scaled by edge
+const KELLY_FRACTION = 0.25;
+
+// Never risk more than 10% of current balance on a single trade
+const MAX_BALANCE_RISK_FRACTION = 0.1;
 
 export interface TradeSignal {
   action: 'buy' | 'sell' | 'hold';
@@ -16,6 +21,41 @@ export interface TradeSignal {
 export class TradingStrategy {
   private isTradeable(status: string): boolean {
     return status === 'open' || status === 'active';
+  }
+
+  /**
+   * Kelly criterion for a binary bet:
+   *   edge = (prob * 1 + (1-prob) * 0 - ask) / (1 - ask)
+   *        = (prob - ask) / (1 - ask)
+   * Returns fraction of bankroll to wager. Negative = no edge, skip.
+   */
+  kellyFraction(prob: number, askPrice: number): number {
+    const edge = (prob - askPrice) / (1 - askPrice);
+    return edge * KELLY_FRACTION;
+  }
+
+  sizeContracts(
+    prob: number,
+    askPrice: number,
+    availableBalanceCents: number,
+  ): { contracts: number; reason?: string } {
+    const kelly = this.kellyFraction(prob, askPrice);
+
+    if (kelly <= 0) {
+      return { contracts: 0, reason: `No edge (ask $${askPrice.toFixed(2)} ≥ prob ${(prob * 100).toFixed(1)}%)` };
+    }
+
+    // Cap at MAX_BALANCE_RISK_FRACTION regardless of Kelly
+    const riskFraction = Math.min(kelly, MAX_BALANCE_RISK_FRACTION);
+    const maxSpendCents = Math.floor(availableBalanceCents * riskFraction);
+    const costPerContractCents = Math.round(askPrice * 100);
+
+    const contracts = Math.min(
+      MAX_CONTRACTS_PER_TRADE,
+      Math.floor(maxSpendCents / costPerContractCents),
+    );
+
+    return { contracts };
   }
 
   evaluateEntry(market: BasketballMarket, availableBalanceCents: number): TradeSignal {
@@ -31,25 +71,31 @@ export class TradingStrategy {
       };
     }
 
-    // Use the ask price for buying yes contracts
     const limitPrice = market.yesAsk > 0 ? market.yesAsk : market.winProbability;
-    const costPerContract = Math.round(limitPrice * 100);
-    if (costPerContract <= 0) {
+    if (limitPrice <= 0) {
       return { action: 'hold', reason: 'Invalid price', market };
     }
 
-    const maxAffordable = Math.floor(
-      Math.min(MAX_COST_PER_TRADE_CENTS, availableBalanceCents) / costPerContract,
+    const { contracts, reason } = this.sizeContracts(
+      market.winProbability,
+      limitPrice,
+      availableBalanceCents,
     );
-    const contracts = Math.min(MAX_CONTRACTS_PER_TRADE, maxAffordable);
 
     if (contracts <= 0) {
-      return { action: 'hold', reason: 'Insufficient balance for even 1 contract', market };
+      return {
+        action: 'hold',
+        reason: reason ?? 'Insufficient balance for even 1 contract',
+        market,
+      };
     }
+
+    const spendDollars = (contracts * Math.round(limitPrice * 100) / 100).toFixed(2);
+    const balancePct = (contracts * limitPrice * 100 / availableBalanceCents * 100).toFixed(1);
 
     return {
       action: 'buy',
-      reason: `Win probability ${(market.winProbability * 100).toFixed(1)}% exceeds entry threshold`,
+      reason: `prob=${( market.winProbability * 100).toFixed(1)}% | kelly=${(this.kellyFraction(market.winProbability, limitPrice) * 100).toFixed(1)}% | risking $${spendDollars} (${balancePct}% of balance)`,
       market,
       suggestedContracts: contracts,
       suggestedLimitPrice: limitPrice,
@@ -81,11 +127,7 @@ export class TradingStrategy {
     return { action: 'hold', reason: 'Hold — probability still above exit threshold', market };
   }
 
-  calculatePnl(
-    entryPrice: number,
-    exitPrice: number,
-    contracts: number,
-  ): number {
+  calculatePnl(entryPrice: number, exitPrice: number, contracts: number): number {
     return (exitPrice - entryPrice) * contracts;
   }
 }

@@ -67,14 +67,21 @@ export interface KalshiOrderResponse {
 
 export interface KalshiPosition {
   ticker: string;
-  market_exposure: number;
-  fees_paid: number;
-  realized_pnl: number;
+  position_fp?: string;          // number of contracts as decimal string
+  market_exposure_dollars?: string;
+  fees_paid_dollars?: string;
+  realized_pnl_dollars?: string;
+  total_traded_dollars?: string;
   resting_orders_count: number;
-  total_traded: number;
-  volume: number;
-  yes_position: number;
-  no_position: number;
+  last_updated_ts?: string;
+  // Legacy integer fields (may be absent)
+  market_exposure?: number;
+  fees_paid?: number;
+  realized_pnl?: number;
+  total_traded?: number;
+  volume?: number;
+  yes_position?: number;
+  no_position?: number;
 }
 
 export interface KalshiBalance {

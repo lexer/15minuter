@@ -1,24 +1,19 @@
 import { KalshiClient } from '../api/KalshiClient';
+import { KalshiPosition } from '../api/types';
 
 export interface Position {
   ticker: string;
-  yesContracts: number;
-  noContracts: number;
-  marketExposure: number;
-  realizedPnl: number;
+  contracts: number;
+  marketExposureDollars: number;
+  realizedPnlDollars: number;
 }
 
 export interface Portfolio {
   availableBalance: number;
-  allocatedBudget: number;
   positions: Position[];
 }
 
-const INITIAL_BUDGET = 500_00; // $500 in cents
-
 export class PortfolioService {
-  private spentCents = 0;
-
   constructor(private readonly client: KalshiClient) {}
 
   async getBalance(): Promise<number> {
@@ -31,40 +26,40 @@ export class PortfolioService {
       this.client.getBalance(),
       this.client.getPositions({ limit: 100 }),
     ]);
-
-    const positions: Position[] = posResp.market_positions.map((p) => ({
-      ticker: p.ticker,
-      yesContracts: p.yes_position,
-      noContracts: p.no_position,
-      marketExposure: p.market_exposure,
-      realizedPnl: p.realized_pnl,
-    }));
-
     return {
       availableBalance: balanceResp.balance,
-      allocatedBudget: INITIAL_BUDGET,
-      positions,
+      positions: posResp.market_positions
+        .filter((p) => this.parseContracts(p) > 0)
+        .map((p) => this.parsePosition(p)),
     };
   }
 
   async getPosition(ticker: string): Promise<Position | null> {
     const resp = await this.client.getPositions({ ticker, limit: 1 });
     const p = resp.market_positions[0];
-    if (!p) return null;
-    return {
-      ticker: p.ticker,
-      yesContracts: p.yes_position,
-      noContracts: p.no_position,
-      marketExposure: p.market_exposure,
-      realizedPnl: p.realized_pnl,
-    };
+    if (!p || this.parseContracts(p) === 0) return null;
+    return this.parsePosition(p);
   }
 
   isBudgetExhausted(currentBalanceCents: number): boolean {
     return currentBalanceCents <= 0;
   }
 
-  hasEnoughBalance(balanceCents: number, costCents: number): boolean {
-    return balanceCents >= costCents;
+  private parseContracts(p: KalshiPosition): number {
+    if (p.position_fp !== undefined) return parseFloat(p.position_fp);
+    return (p.yes_position ?? 0) - (p.no_position ?? 0);
+  }
+
+  private parsePosition(p: KalshiPosition): Position {
+    return {
+      ticker: p.ticker,
+      contracts: this.parseContracts(p),
+      marketExposureDollars: p.market_exposure_dollars
+        ? parseFloat(p.market_exposure_dollars)
+        : (p.market_exposure ?? 0) / 100,
+      realizedPnlDollars: p.realized_pnl_dollars
+        ? parseFloat(p.realized_pnl_dollars)
+        : (p.realized_pnl ?? 0) / 100,
+    };
   }
 }
