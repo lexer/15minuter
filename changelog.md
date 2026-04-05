@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.2.0] — 2026-04-05
+
+### Fixed
+- `TradingAgent` open positions were stored in-memory, resetting to empty on every cron invocation — now loads open trades from persistent `TradeHistory` on each tick
+- Removed `openPositions` in-memory map; `getOpenTrades()` is the single source of truth
+
+### Added
+- `src/scripts/tick.ts` — single-shot tick script; cron now runs `npm run tick` against compiled code instead of inline bash
+- `tick` npm script in `package.json`
+- `TradingAgent.tick()` is now public for direct invocation by scripts
+
 ## [1.1.0] — 2026-04-05
 
 ### Changed

@@ -9,7 +9,6 @@ const POLL_INTERVAL_MS = 30_000;
 
 export class TradingAgent {
   private running = false;
-  private openPositions = new Map<string, TradeRecord>();
 
   constructor(
     private readonly markets: MarketService,
@@ -19,6 +18,22 @@ export class TradingAgent {
     private readonly history: TradeHistory,
   ) {}
 
+  /** Run a single strategy tick and return. Used by cron/scripts. */
+  async tick(): Promise<void> {
+    const balanceCents = await this.portfolio.getBalance();
+    console.log(`[Agent] ${new Date().toISOString()} | Balance: $${(balanceCents / 100).toFixed(2)}`);
+
+    if (this.portfolio.isBudgetExhausted(balanceCents)) {
+      console.log('[Agent] Budget exhausted — halting.');
+      return;
+    }
+
+    await this.manageOpenPositions();
+    await this.scanForEntries(balanceCents);
+    this.logSummary();
+  }
+
+  /** Run continuously in a loop, polling every 30 seconds. */
   async start(): Promise<void> {
     this.running = true;
     console.log('[Agent] Starting autonomous trading agent...');
@@ -41,61 +56,48 @@ export class TradingAgent {
     console.log('[Agent] Stopping...');
   }
 
-  private async tick(): Promise<void> {
-    const balanceCents = await this.portfolio.getBalance();
-    console.log(`[Agent] Balance: $${(balanceCents / 100).toFixed(2)}`);
+  private async manageOpenPositions(): Promise<void> {
+    // Load open positions from persistent history — survives across cron invocations
+    const openTrades = this.history.getOpenTrades();
+    if (openTrades.length === 0) return;
 
-    if (this.portfolio.isBudgetExhausted(balanceCents)) {
-      console.log('[Agent] Budget exhausted — stopping trading.');
-      this.stop();
-      return;
-    }
+    console.log(`[Agent] Managing ${openTrades.length} open position(s)...`);
 
-    // 1. Check open positions for exit signals
-    await this.manageOpenPositions(balanceCents);
-
-    // 2. Scan for new entry opportunities
-    await this.scanForEntries(balanceCents);
-  }
-
-  private async manageOpenPositions(balanceCents: number): Promise<void> {
-    for (const [ticker, record] of this.openPositions.entries()) {
+    for (const record of openTrades) {
       try {
-        const market = await this.markets.getMarket(ticker);
+        const market = await this.markets.getMarket(record.ticker);
         const signal = this.strategy.evaluateExit(market, record.contracts);
 
         if (signal.action === 'sell') {
-          console.log(
-            `[Agent] EXIT signal for ${ticker}: ${signal.reason}`,
-          );
+          console.log(`[Agent] EXIT ${record.ticker}: ${signal.reason}`);
           await this.executeExit(record, market, signal.suggestedLimitPrice ?? market.yesBid);
         } else {
-          console.log(
-            `[Agent] HOLD ${ticker} @ prob=${(market.winProbability * 100).toFixed(1)}%`,
-          );
+          console.log(`[Agent] HOLD ${record.ticker} @ prob=${(market.winProbability * 100).toFixed(1)}%`);
         }
       } catch (err) {
-        console.error(`[Agent] Error managing position ${ticker}:`, err);
+        console.error(`[Agent] Error managing position ${record.ticker}:`, err);
       }
     }
   }
 
   private async scanForEntries(balanceCents: number): Promise<void> {
     const liveMarkets = await this.markets.getLiveBasketballMarkets();
-    console.log(`[Agent] Found ${liveMarkets.length} live basketball winner markets`);
+    const openTickers = new Set(this.history.getOpenTrades().map((t) => t.ticker));
+
+    console.log(`[Agent] ${liveMarkets.length} Q4 market(s) found`);
 
     for (const market of liveMarkets) {
-      if (this.openPositions.has(market.ticker)) continue;
+      if (openTickers.has(market.ticker)) continue;
 
       const signal = this.strategy.evaluateEntry(market, balanceCents);
 
       if (signal.action === 'buy') {
         console.log(
-          `[Agent] ENTRY signal for ${market.ticker}: ${signal.reason} (${signal.suggestedContracts} contracts @ $${signal.suggestedLimitPrice?.toFixed(2)})`,
+          `[Agent] ENTRY ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}% | ${signal.suggestedContracts} contracts @ $${signal.suggestedLimitPrice?.toFixed(2)}`,
         );
         await this.executeEntry(market, signal.suggestedContracts!, signal.suggestedLimitPrice!);
       } else {
-        console.log(`[Agent] SKIP ${market.ticker}: ${signal.reason}`);
+        console.log(`[Agent] SKIP ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}% | ${signal.reason}`);
       }
     }
   }
@@ -120,12 +122,11 @@ export class TradingAgent {
         entryTime: new Date().toISOString(),
       };
       this.history.recordTrade(record);
-      this.openPositions.set(market.ticker, record);
       console.log(
-        `[Agent] Bought ${contracts} YES contracts on ${market.ticker} @ $${limitPrice.toFixed(2)} (orderId=${order.orderId})`,
+        `[Agent] Bought ${contracts} YES contracts on ${market.ticker} @ $${limitPrice.toFixed(2)} | orderId=${order.orderId}`,
       );
     } catch (err) {
-      console.error(`[Agent] Failed to place buy order for ${market.ticker}:`, err);
+      console.error(`[Agent] Failed to buy ${market.ticker}:`, err);
     }
   }
 
@@ -135,11 +136,7 @@ export class TradingAgent {
     limitPrice: number,
   ): Promise<void> {
     try {
-      const order = await this.orders.sellYes(
-        record.ticker,
-        record.contracts,
-        limitPrice,
-      );
+      const order = await this.orders.sellYes(record.ticker, record.contracts, limitPrice);
       const pnl = this.strategy.calculatePnl(
         record.pricePerContract,
         limitPrice,
@@ -151,19 +148,18 @@ export class TradingAgent {
         pnl,
         exitReason: market.status !== 'open' ? 'game_over' : 'probability_drop',
       });
-      this.openPositions.delete(record.ticker);
       console.log(
-        `[Agent] Sold ${record.contracts} YES contracts on ${record.ticker} @ $${limitPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} (orderId=${order.orderId})`,
+        `[Agent] Sold ${record.contracts} contracts on ${record.ticker} @ $${limitPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} | orderId=${order.orderId}`,
       );
     } catch (err) {
-      console.error(`[Agent] Failed to place sell order for ${record.ticker}:`, err);
+      console.error(`[Agent] Failed to sell ${record.ticker}:`, err);
     }
   }
 
   private logSummary(): void {
-    const summary = this.history.getSummary();
+    const s = this.history.getSummary();
     console.log(
-      `[Agent] Trade history: ${summary.totalTrades} trades, PnL=$${summary.totalPnl.toFixed(2)}, winRate=${(summary.winRate * 100).toFixed(1)}%`,
+      `[Agent] History: ${s.totalTrades} trades | PnL=$${s.totalPnl.toFixed(2)} | WinRate=${(s.winRate * 100).toFixed(1)}%`,
     );
   }
 
