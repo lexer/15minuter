@@ -45,9 +45,9 @@ describe('TradingStrategy', () => {
     it('sizes proportionally to balance', () => {
       // prob=0.97, ask=0.94, balance=$1000 (100000 cents)
       // kelly=0.125, capped at 10%, spend=0.1*100000=10000 cents=$100
-      // contracts=floor(10000/94)=106 → capped at 10
+      // contracts=floor(10000/94)=106 → capped at MAX_CONTRACTS_PER_TRADE=50
       const { contracts } = strategy.sizeContracts(0.97, 0.94, 100_000);
-      expect(contracts).toBe(10);
+      expect(contracts).toBe(50);
     });
 
     it('buys fewer contracts with smaller balance', () => {
@@ -114,7 +114,7 @@ describe('TradingStrategy', () => {
     it('caps contracts at MAX_CONTRACTS_PER_TRADE', () => {
       const market = makeMarket({ winProbability: 0.99, yesAsk: 0.01 });
       const signal = strategy.evaluateEntry(market, 10_000_000);
-      expect(signal.suggestedContracts).toBeLessThanOrEqual(10);
+      expect(signal.suggestedContracts).toBeLessThanOrEqual(50);
     });
 
     it('returns hold when ask has no edge over prob', () => {

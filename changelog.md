@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.11.0] — 2026-04-05
+
+### Changed
+- `MAX_CONTRACTS_PER_TRADE` raised 10 → 50. At $500 balance the old cap limited every trade to ~$9.40 (1.9% of balance) regardless of Kelly. Now the 10%-of-balance cap governs sizing — ~$49/trade at $500, scaling proportionally as balance grows or shrinks.
+
 ## [1.10.0] — 2026-04-05
 
 ### Changed

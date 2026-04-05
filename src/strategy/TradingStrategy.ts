@@ -2,7 +2,7 @@ import { BasketballMarket } from '../services/MarketService';
 
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;
-export const MAX_CONTRACTS_PER_TRADE = 10;
+export const MAX_CONTRACTS_PER_TRADE = 50;
 
 // Quarter-Kelly: risk this fraction of balance per trade, scaled by edge
 const KELLY_FRACTION = 0.25;
