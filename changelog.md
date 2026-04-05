@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.0] — 2026-04-05
+
+### Fixed
+- `TradeHistory` now accepts an injectable `filePath` constructor argument — tests use isolated `/tmp` files and no longer delete `trade_history.json` in `process.cwd()`, which was silently wiping the production trade record every test run
+- Restored BOS trade record (10 YES contracts @ $0.98, entered 2026-04-05T21:31:51Z)
+
+### Changed
+- `TradingStrategy`: replaced flat $50 per-trade cap with fractional Kelly criterion. Edge = `(prob - ask) / (1 - ask)`, size = `min(quarterKelly, 10%) × balance`. Only trades when `ask < prob` (positive EV); skips with "No edge" otherwise.
+- `KalshiPosition` types updated to actual API response shape: `position_fp` (decimal string), `market_exposure_dollars`, `realized_pnl_dollars` etc. Legacy integer fields marked optional.
+- `PortfolioService` updated to parse `position_fp` and `_dollars` string fields accordingly.
+- `isTradeable()` now accepts both `'open'` and `'active'` status — KXNBAGAME markets use `'active'`.
+
 ## [1.8.0] — 2026-04-05
 
 ### Fixed
