@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.6.0] — 2026-04-05
+
+### Fixed
+- Reduced `GameMonitor` cache TTL from 20s → 5s to match the actual NBA CDN update cadence (~5-10s per `Last-Modified` headers). Previously could act on game state up to 20s stale during critical Q4 moments.
+
 ## [1.5.0] — 2026-04-05
 
 ### Changed

@@ -35,7 +35,7 @@ const NBA_SCOREBOARD_URL =
 export class GameMonitor {
   private cache: NbaGameState[] = [];
   private lastFetch = 0;
-  private readonly cacheTtlMs = 20_000; // refresh at most every 20s
+  private readonly cacheTtlMs = 5_000; // NBA CDN updates every ~5-10s
 
   async getLiveGames(): Promise<NbaGameState[]> {
     const now = Date.now();
