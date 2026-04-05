@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.12.0] — 2026-04-05
+
+### Fixed
+- Agent no longer tries to place sell orders into settled/inactive markets (was getting 409 `MARKET_NOT_ACTIVE` on every tick after game end)
+- `manageOpenPositions` now has three distinct paths:
+  1. `market.result` set → `recordSettlement()` directly (no order)
+  2. Market inactive, no result yet → `AWAITING SETTLEMENT` (wait for Kalshi async resolution)
+  3. Market active, prob below threshold → normal sell order
+- Added `result?: string` field to `BasketballMarket` interface, populated from Kalshi API response
+
 ## [1.11.0] — 2026-04-05
 
 ### Changed

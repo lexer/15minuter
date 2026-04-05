@@ -7,6 +7,7 @@ export interface BasketballMarket {
   eventTicker: string;
   title: string;
   status: string;
+  result?: string; // set by Kalshi when market settles, e.g. 'yes' or 'no'
   yesBid: number;
   yesAsk: number;
   noBid: number;
@@ -129,6 +130,7 @@ export class MarketService {
       eventTicker: m.event_ticker ?? '',
       title: m.title,
       status: m.status,
+      result: m.result,
       yesBid: bid,
       yesAsk: ask,
       noBid,

@@ -82,6 +82,22 @@ export class TradingAgent {
       try {
         const market = await this.markets.getMarket(record.ticker);
         marketProbs.set(record.ticker, market.winProbability);
+
+        // Market settled — record outcome directly, no sell order needed
+        if (market.result) {
+          this.recordSettlement(record, market);
+          continue;
+        }
+
+        const isTradeable = market.status === 'active' || market.status === 'open';
+
+        // Market closed but not yet settled — Kalshi resolves asynchronously, wait
+        if (!isTradeable) {
+          console.log(`[Agent] AWAITING SETTLEMENT ${record.ticker} (status=${market.status})`);
+          this.analysis.logDecision({ type: 'hold', ticker: record.ticker, reason: `Awaiting settlement (status=${market.status})` });
+          continue;
+        }
+
         const signal = this.strategy.evaluateExit(market, record.contracts);
 
         if (signal.action === 'sell') {
@@ -136,6 +152,30 @@ export class TradingAgent {
         console.log(`[Agent] SKIP ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}% | ${signal.reason}`);
       }
     }
+  }
+
+  private recordSettlement(record: TradeRecord, market: BasketballMarket): void {
+    const won = market.result === record.side; // 'yes' side wins if result === 'yes'
+    const settlementPrice = won ? 1.0 : 0.0;
+    const pnl = this.strategy.calculatePnl(record.pricePerContract, settlementPrice, record.contracts);
+    this.history.updateTrade(record.id, {
+      exitTime: new Date().toISOString(),
+      winProbabilityAtExit: won ? 1.0 : 0.0,
+      pnl,
+      exitReason: 'game_over',
+      gameCompleted: true,
+      gameResult: won ? 'win' : 'loss',
+    });
+    console.log(
+      `[Agent] SETTLED ${record.ticker} result=${market.result} | ${won ? 'WON' : 'LOST'} | PnL: $${pnl.toFixed(2)}`,
+    );
+    this.analysis.logDecision({
+      type: 'exit',
+      ticker: record.ticker,
+      reason: `Market settled: result=${market.result}`,
+      contracts: record.contracts,
+      price: settlementPrice,
+    });
   }
 
   private async executeEntry(
