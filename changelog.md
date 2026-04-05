@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.14.0] — 2026-04-05
+
+### Added
+- `src/scripts/backtest.ts` — calibration backtest using NBA Stats API (`playbyplayv3`). Pulls Q4 play-by-play for historical games, samples score at 12 time points per Q4, computes model win probability vs actual outcome, outputs calibration table + Brier score. Usage: `npm run backtest [-- --season 2024-25 --games 150]`
+- `backtest` npm script
+
+### Results (30-game pilot, 648 samples)
+- Brier score: 0.028 (random=0.250, perfect=0.000)
+- Model underconfident 60–95%: actual win rates 5–15% higher than predicted
+- Model well-calibrated at 99–100% (blowouts)
+- Implication: σ=0.307 should be **reduced** to make model more confident; recalibration pending full 150-game run
+
 ## [1.13.0] — 2026-04-05
 
 ### Added
