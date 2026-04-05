@@ -7,3 +7,4 @@ dist/
 trade_history.json
 agent.log
 agent.pid
+analysis.log

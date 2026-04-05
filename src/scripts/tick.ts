@@ -45,6 +45,7 @@ async function main(): Promise<void> {
     new PortfolioService(client),
     new TradingStrategy(),
     new TradeHistory(),
+    gameMonitor,
   );
 
   await agent.tick();

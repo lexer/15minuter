@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0] — 2026-04-05
+
+### Added
+- `AnalysisLogger` — writes one JSON line per tick to `analysis.log` containing: all game states, Q4 market evaluations with signals, entry/exit/hold decisions with order IDs, open position unrealized PnL, and portfolio summary
+- `TradingAgent` now accepts `GameMonitor` directly so it can log all game states (not just Q4) for analysis
+- `analysis.log` added to `.gitignore`
+
 ## [1.6.0] — 2026-04-05
 
 ### Fixed

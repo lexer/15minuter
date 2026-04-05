@@ -34,6 +34,7 @@ function main(): void {
     portfolioService,
     strategy,
     history,
+    gameMonitor,
   );
 
   process.on('SIGINT', () => {
