@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.0] — 2026-04-05
+
+### Added
+- `tick.ts` now logs all live game scores and periods before running the agent tick — no separate command needed to monitor game state
+- Q4 games are marked with `*** Q4` in the log output
+
+### Changed
+- CLAUDE.md updated: all commits must also be **pushed** to remote
+
 ## [1.2.0] — 2026-04-05
 
 ### Fixed
