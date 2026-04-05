@@ -7,6 +7,7 @@ import { KalshiClient } from './api/KalshiClient';
 import { MarketService } from './services/MarketService';
 import { OrderService } from './services/OrderService';
 import { PortfolioService } from './services/PortfolioService';
+import { GameMonitor } from './services/GameMonitor';
 import { TradingStrategy } from './strategy/TradingStrategy';
 import { TradeHistory } from './storage/TradeHistory';
 import { TradingAgent } from './agent/TradingAgent';
@@ -20,7 +21,8 @@ function main(): void {
   const privateKeyPath = path.resolve(process.cwd(), 'private_key.pem');
 
   const client = new KalshiClient(keyId, privateKeyPath);
-  const marketService = new MarketService(client);
+  const gameMonitor = new GameMonitor();
+  const marketService = new MarketService(client, gameMonitor);
   const orderService = new OrderService(client);
   const portfolioService = new PortfolioService(client);
   const strategy = new TradingStrategy();

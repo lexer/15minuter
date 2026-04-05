@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0] — 2026-04-05
+
+### Changed
+- Fixed market discovery to use `KXNBAGAME` series (individual game winner markets, not NBA Finals futures)
+- Fixed price parsing: Kalshi returns `yes_bid_dollars`/`yes_ask_dollars` as dollar strings, not integer cents
+- Updated `KalshiMarket` types to reflect actual API response shape
+- Added `GameMonitor` service — polls NBA live scoreboard API to detect live games and current period
+- `MarketService` now filters to only markets where the game is in Q4 or later (`period >= 4`, `gameStatus == 2`)
+- Added team tricode mapping from Kalshi event ticker codes to NBA API tricodes
+- Wired `GameMonitor` into agent entry point
+- 34 tests passing (8 new tests for `GameMonitor` and updated `MarketService` tests)
+
 ## [1.0.0] — 2026-04-05
 
 ### Added

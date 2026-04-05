@@ -3,24 +3,36 @@ export interface KalshiMarket {
   event_ticker: string;
   title: string;
   status: string;
-  yes_bid: number;
-  yes_ask: number;
-  no_bid: number;
-  no_ask: number;
-  last_price: number;
-  volume: number;
-  open_interest: number;
+  // Integer cent fields (0-100 range) — may be absent in newer API responses
+  yes_bid?: number;
+  yes_ask?: number;
+  no_bid?: number;
+  no_ask?: number;
+  last_price?: number;
+  // Dollar string fields — present in KXNBAGAME series
+  yes_bid_dollars?: string;
+  yes_ask_dollars?: string;
+  no_bid_dollars?: string;
+  no_ask_dollars?: string;
+  last_price_dollars?: string;
+  volume?: number;
+  volume_fp?: string;
+  open_interest?: number;
+  open_interest_fp?: string;
   close_time: string;
   expiration_time: string;
+  expected_expiration_time?: string;
+  updated_time?: string;
   result?: string;
   can_close_early: boolean;
   rules_primary: string;
   rules_secondary: string;
-  category: string;
-  series_ticker: string;
+  category?: string;
+  series_ticker?: string;
   strike_type?: string;
   floor_strike?: number;
   cap_strike?: number;
+  response_price_units?: string;
 }
 
 export interface KalshiEvent {
@@ -123,23 +135,4 @@ export interface KalshiPositionsResponse {
 export interface KalshiTradesResponse {
   trades: KalshiTrade[];
   cursor: string;
-}
-
-export interface KalshiSeriesResponse {
-  series: {
-    ticker: string;
-    frequency: string;
-    title: string;
-    category: string;
-  };
-}
-
-export interface KalshiLiveData {
-  ticker: string;
-  yes_bid: number;
-  yes_ask: number;
-  no_bid: number;
-  no_ask: number;
-  last_price: number;
-  volume: number;
 }
