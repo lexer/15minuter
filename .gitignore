@@ -1,0 +1,7 @@
+.env
+private_key.rsa
+private_key.pem
+node_modules/
+dist/
+*.js.map
+trade_history.json
