@@ -7,7 +7,7 @@ import { TradeHistory, TradeRecord } from '../storage/TradeHistory';
 import { AnalysisLogger } from '../storage/AnalysisLogger';
 import * as crypto from 'crypto';
 
-const POLL_INTERVAL_MS = 30_000;
+const POLL_INTERVAL_MS = 5_000; // matches NBA CDN update cadence (~5s per Last-Modified headers)
 
 export class TradingAgent {
   private running = false;

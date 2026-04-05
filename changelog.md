@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.10.0] — 2026-04-05
+
+### Changed
+- `TradingAgent` poll interval reduced from 30s → 5s to match NBA CDN update cadence (~5s per `Last-Modified` headers). The `GameMonitor` cache TTL was already 5s; now the agent reacts to each new scoreboard snapshot instead of waiting 30s.
+- Updated `CLAUDE.md` strategy rule 5 to reflect 5-second loop.
+
 ## [1.9.0] — 2026-04-05
 
 ### Fixed
