@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.13.0] — 2026-04-05
+
+### Added
+- `WinProbabilityModel` — Gaussian random walk model (Clauset et al. 2015) for NBA win probability from score differential + time remaining. σ calibrated so +10 pts with 5 min left ≈ 97%. This gives an **independent** probability estimate that can have positive edge against the market ask price, unlike using market mid price which can never beat the ask.
+- `MarketService.modelWinProbability()` overrides `winProbability` with the model when game state is available; extracts market team code from ticker suffix (e.g. `KXNBAGAME-...-BOS` → `BOS`)
+- 15 new unit tests for `WinProbabilityModel`
+
+### Changed
+- `TradingAgent` poll interval: 5s → 1s (Kalshi bid/ask cadence). Balance cached 5s to avoid redundant API calls.
+- `AnalysisLogger` writes to daily `analysis_YYYY-MM-DD.log` instead of one file; `run.sh` writes to `agent_YYYY-MM-DD.log`
+- `.gitignore` updated for `agent_*.log` and `analysis_*.log` patterns
+- `CLAUDE.md` strategy rule 5 updated to reflect 1s polling
+
 ## [1.12.0] — 2026-04-05
 
 ### Fixed

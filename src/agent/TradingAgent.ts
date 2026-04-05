@@ -7,11 +7,14 @@ import { TradeHistory, TradeRecord } from '../storage/TradeHistory';
 import { AnalysisLogger } from '../storage/AnalysisLogger';
 import * as crypto from 'crypto';
 
-const POLL_INTERVAL_MS = 5_000; // matches NBA CDN update cadence (~5s per Last-Modified headers)
+const POLL_INTERVAL_MS = 1_000;   // Kalshi bid/ask update cadence
+const BALANCE_REFRESH_MS = 5_000; // balance only refreshed every 5s
 
 export class TradingAgent {
   private running = false;
   private readonly analysis = new AnalysisLogger();
+  private cachedBalanceCents = 0;
+  private lastBalanceFetch = 0;
 
   constructor(
     private readonly markets: MarketService,
@@ -23,7 +26,12 @@ export class TradingAgent {
   ) {}
 
   async tick(): Promise<void> {
-    const balanceCents = await this.portfolio.getBalance();
+    const now = Date.now();
+    if (now - this.lastBalanceFetch >= BALANCE_REFRESH_MS) {
+      this.cachedBalanceCents = await this.portfolio.getBalance();
+      this.lastBalanceFetch = now;
+    }
+    const balanceCents = this.cachedBalanceCents;
     this.analysis.startTick(balanceCents);
 
     console.log(`[Agent] ${new Date().toISOString()} | Balance: $${(balanceCents / 100).toFixed(2)}`);

@@ -1,6 +1,7 @@
 import { KalshiClient } from '../api/KalshiClient';
 import { KalshiMarket } from '../api/types';
 import { GameMonitor, NbaGameState } from './GameMonitor';
+import { WinProbabilityModel } from './WinProbabilityModel';
 
 export interface BasketballMarket {
   ticker: string;
@@ -30,6 +31,8 @@ const KALSHI_TO_NBA: Record<string, string> = {
 };
 
 export class MarketService {
+  private readonly winModel = new WinProbabilityModel();
+
   constructor(
     private readonly client: KalshiClient,
     private readonly gameMonitor: GameMonitor,
@@ -52,7 +55,7 @@ export class MarketService {
       const parsed = this.parseMarket(m);
       if (!parsed) continue;
 
-      // Attach live game state for Q4 detection
+      // Attach live game state for Q4 detection and win probability model
       const codes = this.extractTeamCodes(m.event_ticker ?? '');
       if (codes) {
         const gameState = await this.gameMonitor.getGameState(
@@ -60,6 +63,10 @@ export class MarketService {
           KALSHI_TO_NBA[codes.team2] ?? codes.team2,
         );
         parsed.gameState = gameState ?? undefined;
+        if (gameState) {
+          const teamCode = this.extractMarketTeamCode(m.ticker);
+          parsed.winProbability = this.modelWinProbability(gameState, codes, teamCode) ?? parsed.winProbability;
+        }
       }
 
       // Only include markets where game is in Q4 or later
@@ -83,6 +90,10 @@ export class MarketService {
         KALSHI_TO_NBA[codes.team2] ?? codes.team2,
       );
       parsed.gameState = gameState ?? undefined;
+      if (gameState) {
+        const teamCode = this.extractMarketTeamCode(resp.market.ticker);
+        parsed.winProbability = this.modelWinProbability(gameState, codes, teamCode) ?? parsed.winProbability;
+      }
     }
 
     return parsed;
@@ -105,6 +116,44 @@ export class MarketService {
     const match = eventTicker.match(/\d{2}[A-Z]{3}\d{2}([A-Z]{3})([A-Z]{3})$/);
     if (!match) return null;
     return { team1: match[1], team2: match[2] };
+  }
+
+  /** Extract team code from market ticker, e.g. "KXNBAGAME-26APR05TORBOS-BOS" → "BOS" */
+  private extractMarketTeamCode(ticker: string): string | null {
+    const m = ticker.match(/-([A-Z]{3})$/);
+    return m ? m[1] : null;
+  }
+
+  /**
+   * Compute win probability for the market team using the score/time model.
+   * Returns null if insufficient data.
+   */
+  private modelWinProbability(
+    gameState: NbaGameState,
+    codes: { team1: string; team2: string },
+    marketTeamCode: string | null,
+  ): number | null {
+    if (!marketTeamCode || !gameState.gameClock) return null;
+
+    const nbaTeam1 = KALSHI_TO_NBA[codes.team1] ?? codes.team1;
+    const nbaTeam2 = KALSHI_TO_NBA[codes.team2] ?? codes.team2;
+
+    // Determine score differential from this team's perspective
+    let scoreDiff: number;
+    if (gameState.homeTeamTricode === nbaTeam1 && marketTeamCode === codes.team1) {
+      scoreDiff = gameState.homeScore - gameState.awayScore;
+    } else if (gameState.awayTeamTricode === nbaTeam1 && marketTeamCode === codes.team1) {
+      scoreDiff = gameState.awayScore - gameState.homeScore;
+    } else if (gameState.homeTeamTricode === nbaTeam2 && marketTeamCode === codes.team2) {
+      scoreDiff = gameState.homeScore - gameState.awayScore;
+    } else if (gameState.awayTeamTricode === nbaTeam2 && marketTeamCode === codes.team2) {
+      scoreDiff = gameState.awayScore - gameState.homeScore;
+    } else {
+      return null;
+    }
+
+    const secondsLeft = WinProbabilityModel.secondsRemaining(gameState.period, gameState.gameClock);
+    return this.winModel.calculate(scoreDiff, secondsLeft);
   }
 
   private parseMarket(m: KalshiMarket): BasketballMarket | null {

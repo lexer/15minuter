@@ -30,7 +30,7 @@ You are a self-improving autonomous agent whose purpose is to generate profit by
 2. Only place trades during the **fourth quarter of live games**.  
 3. Enter trades **only when win probability exceeds 90%**.  
 4. Exit trades if win probability drops below **80%**.  
-5. Run strategy in a **5-second** loop to match NBA CDN data update cadence.  
+5. Run strategy in a **1-second** loop for Kalshi bid/ask updates; NBA game data is cached for 5 seconds.  
 6. Track the full history of trades and analyze completed games to improve the strategy over time.  
 7. Start with a **$500 budget**.  
 8. Stop trading entirely if the full budget is lost.

@@ -56,7 +56,11 @@ export interface PositionAnalysis {
   unrealizedPnl?: number;
 }
 
-const ANALYSIS_LOG = path.resolve(process.cwd(), 'analysis.log');
+function dailyLogPath(prefix: string): string {
+  const d = new Date();
+  const date = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  return path.resolve(process.cwd(), `${prefix}_${date}.log`);
+}
 
 export class AnalysisLogger {
   private pendingTick: Partial<TickAnalysis> = {};
@@ -131,7 +135,7 @@ export class AnalysisLogger {
       openPositions: this.pendingTick.openPositions ?? [],
       summary,
     };
-    fs.appendFileSync(ANALYSIS_LOG, JSON.stringify(tick) + '\n', 'utf-8');
+    fs.appendFileSync(dailyLogPath('analysis'), JSON.stringify(tick) + '\n', 'utf-8');
     this.pendingTick = {};
   }
 }

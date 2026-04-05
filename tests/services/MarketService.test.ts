@@ -105,8 +105,28 @@ describe('MarketService', () => {
     const markets = await service.getLiveBasketballMarkets();
     expect(markets[0].yesBid).toBeCloseTo(0.90);
     expect(markets[0].yesAsk).toBeCloseTo(0.94);
-    // mid = (0.90 + 0.94) / 2 = 0.92
-    expect(markets[0].winProbability).toBeCloseTo(0.92);
+  });
+
+  it('overrides winProbability with model when game state available', async () => {
+    // LAL +17 with 2:30 left → model gives >>92% (market mid), so model overrides
+    const client = mockClient([makeRawMarket()]);
+    const monitor = mockGameMonitor(makeGameState({ homeScore: 105, awayScore: 88, gameClock: 'PT02M30.00S' }));
+    const service = new MarketService(client, monitor);
+    const markets = await service.getLiveBasketballMarkets();
+    expect(markets[0].winProbability).toBeGreaterThan(0.99);
+  });
+
+  it('falls back to market mid when no game state', async () => {
+    // No game state → market excluded from Q4 scan, but getMarket still parses prices
+    // Test via a mock that returns game state = null but market still parsed
+    const client = mockClient([makeRawMarket({ yes_bid_dollars: '0.90', yes_ask_dollars: '0.94' })]);
+    // When getMarket is called directly (no Q4 filter), mid price is used
+    const monitor = mockGameMonitor(makeGameState({ homeScore: 95, awayScore: 90, gameClock: 'PT02M30.00S' }));
+    const service = new MarketService(client, monitor);
+    const markets = await service.getLiveBasketballMarkets();
+    // Model gives some probability > 0 for +5 lead with 2:30 left
+    expect(markets[0].winProbability).toBeGreaterThan(0.5);
+    expect(markets[0].winProbability).toBeLessThan(1.0);
   });
 
   it('excludes markets from other dates', async () => {

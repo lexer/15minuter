@@ -5,6 +5,6 @@ node_modules/
 dist/
 *.js.map
 trade_history.json
-agent.log
 agent.pid
-analysis.log
+agent_*.log
+analysis_*.log
