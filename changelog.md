@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.16.0] — 2026-04-05
+
+### Changed
+- `TradingStrategy`: fully market-price-based signals — no model dependency
+  - **Entry**: buy when `yesAsk > 90¢`, size at flat 10% of balance (removed Kelly)
+  - **Exit**: sell when `yesBid ≤ 80¢` (was: model win probability ≤ 80%)
+  - Simpler and more reactive: market price already reflects score, time, fouls, rotations
+
 ## [1.15.0] — 2026-04-05
 
 ### Changed

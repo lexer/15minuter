@@ -63,55 +63,47 @@ export class TradingStrategy {
       return { action: 'hold', reason: `Market not tradeable (status=${market.status})`, market };
     }
 
-    // Market ask must cross 90¢ first (momentum trigger); model edge is validated below via Kelly
     if (market.yesAsk <= ENTRY_PROBABILITY_THRESHOLD) {
       return {
         action: 'hold',
-        reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ below entry threshold ${ENTRY_PROBABILITY_THRESHOLD * 100}¢ — market not confirming`,
+        reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ at or below entry threshold ${ENTRY_PROBABILITY_THRESHOLD * 100}¢`,
         market,
       };
     }
 
-    const limitPrice = market.yesAsk > 0 ? market.yesAsk : market.winProbability;
-    if (limitPrice <= 0) {
-      return { action: 'hold', reason: 'Invalid price', market };
+    if (market.yesAsk <= 0) {
+      return { action: 'hold', reason: 'Invalid ask price', market };
     }
 
-    const { contracts, reason } = this.sizeContracts(
-      market.winProbability,
-      limitPrice,
-      availableBalanceCents,
-    );
+    // Size at 10% of balance (no Kelly — market price is the signal)
+    const maxSpendCents = Math.floor(availableBalanceCents * MAX_BALANCE_RISK_FRACTION);
+    const costPerContractCents = Math.round(market.yesAsk * 100);
+    const contracts = Math.min(MAX_CONTRACTS_PER_TRADE, Math.floor(maxSpendCents / costPerContractCents));
 
     if (contracts <= 0) {
-      return {
-        action: 'hold',
-        reason: reason ?? 'Insufficient balance for even 1 contract',
-        market,
-      };
+      return { action: 'hold', reason: 'Insufficient balance for even 1 contract', market };
     }
 
-    const spendDollars = (contracts * Math.round(limitPrice * 100) / 100).toFixed(2);
-    const balancePct = (contracts * limitPrice * 100 / availableBalanceCents * 100).toFixed(1);
+    const spendDollars = (contracts * costPerContractCents / 100).toFixed(2);
+    const balancePct = (contracts * costPerContractCents / availableBalanceCents * 100).toFixed(1);
 
     return {
       action: 'buy',
-      reason: `prob=${( market.winProbability * 100).toFixed(1)}% | kelly=${(this.kellyFraction(market.winProbability, limitPrice) * 100).toFixed(1)}% | risking $${spendDollars} (${balancePct}% of balance)`,
+      reason: `ask=${(market.yesAsk * 100).toFixed(0)}¢ > ${ENTRY_PROBABILITY_THRESHOLD * 100}¢ | risking $${spendDollars} (${balancePct}% of balance)`,
       market,
       suggestedContracts: contracts,
-      suggestedLimitPrice: limitPrice,
+      suggestedLimitPrice: market.yesAsk,
     };
   }
 
   evaluateExit(market: BasketballMarket, heldContracts: number): TradeSignal {
-    if (market.winProbability <= EXIT_PROBABILITY_THRESHOLD) {
-      const limitPrice = market.yesBid > 0 ? market.yesBid : market.winProbability;
+    if (market.yesBid <= EXIT_PROBABILITY_THRESHOLD) {
       return {
         action: 'sell',
-        reason: `Win probability ${(market.winProbability * 100).toFixed(1)}% dropped below exit threshold ${EXIT_PROBABILITY_THRESHOLD * 100}%`,
+        reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ below exit threshold ${EXIT_PROBABILITY_THRESHOLD * 100}¢`,
         market,
         suggestedContracts: heldContracts,
-        suggestedLimitPrice: limitPrice,
+        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
       };
     }
 
@@ -121,11 +113,11 @@ export class TradingStrategy {
         reason: `Market ${market.status} — closing position`,
         market,
         suggestedContracts: heldContracts,
-        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : market.winProbability,
+        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
       };
     }
 
-    return { action: 'hold', reason: 'Hold — probability still above exit threshold', market };
+    return { action: 'hold', reason: `Hold — bid ${(market.yesBid * 100).toFixed(0)}¢ above exit threshold`, market };
   }
 
   calculatePnl(entryPrice: number, exitPrice: number, contracts: number): number {

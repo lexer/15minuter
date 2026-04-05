@@ -72,83 +72,83 @@ describe('TradingStrategy', () => {
   });
 
   describe('evaluateEntry', () => {
-    it('returns buy when probability exceeds threshold with positive edge', () => {
-      // prob=0.97 > ask=0.94 → positive edge
-      const market = makeMarket({ winProbability: 0.97, yesAsk: 0.94 });
+    it('returns buy when ask exceeds threshold', () => {
+      // ask=0.94 > 0.90 → buy at 10% of balance
+      const market = makeMarket({ yesAsk: 0.94 });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.suggestedContracts).toBeGreaterThan(0);
+      expect(signal.suggestedLimitPrice).toBe(0.94);
     });
 
-    it('returns hold when ask is below entry threshold even if model says >90%', () => {
-      // Market not confirming — ask 85¢ < 90¢ threshold
-      const market = makeMarket({ winProbability: 0.95, yesAsk: 0.85 });
+    it('returns hold when ask is at or below entry threshold', () => {
+      const market = makeMarket({ yesAsk: 0.85 });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
-      expect(signal.reason).toMatch(/market not confirming/);
     });
 
     it('returns hold at exactly the ask threshold', () => {
-      // ask == threshold (not strictly above) → hold
-      const market = makeMarket({ winProbability: 0.97, yesAsk: ENTRY_PROBABILITY_THRESHOLD });
+      const market = makeMarket({ yesAsk: ENTRY_PROBABILITY_THRESHOLD });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
     });
 
     it('returns hold when market status is not tradeable', () => {
-      const market = makeMarket({ status: 'closed', winProbability: 0.99 });
+      const market = makeMarket({ status: 'closed', yesAsk: 0.99 });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
     });
 
     it('accepts active status as tradeable', () => {
-      const market = makeMarket({ status: 'active', winProbability: 0.97, yesAsk: 0.94 });
+      const market = makeMarket({ status: 'active', yesAsk: 0.94 });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
     });
 
     it('returns hold when balance is too small for 1 contract', () => {
-      const market = makeMarket({ winProbability: 0.97, yesAsk: 0.94 });
+      const market = makeMarket({ yesAsk: 0.94 });
       // balance=50 cents → 10% = 5 cents, can't afford $0.94
       const signal = strategy.evaluateEntry(market, 50);
       expect(signal.action).toBe('hold');
     });
 
     it('caps contracts at MAX_CONTRACTS_PER_TRADE', () => {
-      const market = makeMarket({ winProbability: 0.99, yesAsk: 0.91 });
+      const market = makeMarket({ yesAsk: 0.91 });
       const signal = strategy.evaluateEntry(market, 10_000_000);
       expect(signal.suggestedContracts).toBeLessThanOrEqual(50);
     });
 
-    it('returns hold when ask has no edge over prob', () => {
-      // prob=0.93 but ask=0.95 → no edge
-      const market = makeMarket({ winProbability: 0.93, yesAsk: 0.95 });
+    it('sizes at 10% of balance regardless of model probability', () => {
+      // ask=0.94, balance=$1000 → 10% = $100 → floor(10000/94) = 106 → capped at 50
+      const market = makeMarket({ yesAsk: 0.94, winProbability: 0.93 });
       const signal = strategy.evaluateEntry(market, 100_000);
-      expect(signal.action).toBe('hold');
+      expect(signal.action).toBe('buy');
+      expect(signal.suggestedContracts).toBe(50);
     });
   });
 
   describe('evaluateExit', () => {
-    it('returns sell when probability drops below threshold', () => {
-      const market = makeMarket({ winProbability: 0.75 });
+    it('returns sell when bid drops below exit threshold', () => {
+      const market = makeMarket({ yesBid: 0.75 });
       const signal = strategy.evaluateExit(market, 5);
       expect(signal.action).toBe('sell');
     });
 
-    it('returns hold when probability stays above threshold', () => {
-      const market = makeMarket({ winProbability: 0.88 });
+    it('returns hold when bid stays above exit threshold', () => {
+      const market = makeMarket({ yesBid: 0.88 });
       const signal = strategy.evaluateExit(market, 5);
       expect(signal.action).toBe('hold');
     });
 
     it('returns sell when market is not tradeable', () => {
-      const market = makeMarket({ status: 'closed', winProbability: 0.99 });
+      const market = makeMarket({ status: 'closed', yesBid: 0.99 });
       const signal = strategy.evaluateExit(market, 5);
       expect(signal.action).toBe('sell');
     });
 
     it('returns sell at exactly exit threshold', () => {
-      const market = makeMarket({ winProbability: EXIT_PROBABILITY_THRESHOLD });
+      // bid == threshold → sell (need bid strictly above threshold to hold)
+      const market = makeMarket({ yesBid: EXIT_PROBABILITY_THRESHOLD });
       const signal = strategy.evaluateExit(market, 5);
       expect(signal.action).toBe('sell');
     });
