@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     console.log(`[Games] ${live.length} live:`);
     live.forEach((g) =>
       console.log(
-        `  ${g.awayTeamTricode}@${g.homeTeamTricode} Q${g.period} ${g.gameClock.replace('PT', '').replace('M', 'm').replace('.00S', 's')} | ${g.awayScore}-${g.homeScore}${g.isQ4OrLater ? ' *** Q4' : ''}`,
+        `  ${g.awayTeamTricode}@${g.homeTeamTricode} Q${g.period} ${GameMonitor.formatClock(g.gameClock)} | ${g.awayScore}-${g.homeScore}${g.isQ4OrLater ? ' *** Q4' : ''}`,
       ),
     );
   }

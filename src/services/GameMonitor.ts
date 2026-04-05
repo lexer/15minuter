@@ -75,6 +75,15 @@ export class GameMonitor {
     );
   }
 
+  /** Convert ISO 8601 duration e.g. "PT02M16.00S" → "2:16" */
+  static formatClock(raw: string): string {
+    const m = raw.match(/PT(\d+)M([\d.]+)S/);
+    if (!m) return raw;
+    const mins = m[1].padStart(2, '0');
+    const secs = Math.floor(parseFloat(m[2])).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
+  }
+
   private parseGame(g: NbaRawGame): NbaGameState {
     return {
       gameId: g.gameId,

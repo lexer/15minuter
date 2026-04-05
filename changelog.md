@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.0] — 2026-04-05
+
+### Fixed
+- Game clock display was broken for non-zero seconds (e.g. `PT00M27.30S` showed `00m27.30S` instead of `00:27`)
+- Moved clock formatting to `GameMonitor.formatClock()` static utility with proper ISO 8601 duration parsing
+
 ## [1.3.0] — 2026-04-05
 
 ### Added
