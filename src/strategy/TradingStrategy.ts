@@ -14,9 +14,13 @@ export interface TradeSignal {
 }
 
 export class TradingStrategy {
+  private isTradeable(status: string): boolean {
+    return status === 'open' || status === 'active';
+  }
+
   evaluateEntry(market: BasketballMarket, availableBalanceCents: number): TradeSignal {
-    if (market.status !== 'open') {
-      return { action: 'hold', reason: 'Market not open', market };
+    if (!this.isTradeable(market.status)) {
+      return { action: 'hold', reason: `Market not tradeable (status=${market.status})`, market };
     }
 
     if (market.winProbability <= ENTRY_PROBABILITY_THRESHOLD) {
@@ -64,7 +68,7 @@ export class TradingStrategy {
       };
     }
 
-    if (market.status !== 'open') {
+    if (!this.isTradeable(market.status)) {
       return {
         action: 'sell',
         reason: `Market ${market.status} — closing position`,

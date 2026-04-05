@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.8.0] — 2026-04-05
+
+### Fixed
+- Critical: `TradingStrategy` blocked all trades on KXNBAGAME markets because it checked `status === 'open'` but these markets use `status === 'active'`. Added `isTradeable()` helper accepting both. First real trade placed immediately after fix: 10 YES contracts on BOS @ $0.98.
+
 ## [1.7.0] — 2026-04-05
 
 ### Added
