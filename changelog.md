@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.0] — 2026-04-05
+
+### Changed
+- Replaced Claude cron orchestration with a self-contained background process — agent now runs its own 30-second loop via `TradingAgent.start()`, eliminating full conversation context loading on every tick
+- Added `run.sh` to start the agent as a background process with PID tracking and file logging
+- Added `npm run agent` script for direct invocation of compiled agent
+- Added `agent.log` and `agent.pid` to `.gitignore`
+
 ## [1.4.0] — 2026-04-05
 
 ### Fixed
