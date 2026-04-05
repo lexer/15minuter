@@ -1,13 +1,17 @@
 /**
  * Backtest the WinProbabilityModel against NBA play-by-play data.
  *
- * Uses stats.nba.com (playbyplayv3) to pull Q4 actions for recent games,
- * samples the score at regular intervals, and compares model probability
- * against the actual game outcome.
+ * On first run fetches from stats.nba.com and saves to data/nba/{season}/.
+ * Subsequent runs load from local cache — no API calls needed.
  *
- * Usage: npm run backtest [-- --season 2024-25 --games 200]
+ * Usage:
+ *   npm run backtest                          # 2024-25, up to 150 games
+ *   npm run backtest -- --season 2023-24 --games 200
+ *   npm run backtest -- --fetch-only          # download data without calibration output
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { WinProbabilityModel } from '../services/WinProbabilityModel';
 
 const STATS_HEADERS: Record<string, string> = {
@@ -22,15 +26,22 @@ const STATS_HEADERS: Record<string, string> = {
 
 const STATS_BASE = 'https://stats.nba.com/stats';
 const RATE_LIMIT_MS = 700;
+const DATA_DIR = path.resolve(process.cwd(), 'data', 'nba');
 
 // Seconds remaining in Q4 to sample at
 const SAMPLE_SECONDS = [600, 480, 360, 300, 240, 180, 120, 90, 60, 45, 30, 15];
 
-interface Action {
-  clock: string;      // "PT02M30.00S"
-  period: number;
-  scoreHome: string;  // "95"
-  scoreAway: string;  // "88"
+export interface GameRecord {
+  gameId: string;
+  season: string;
+  homeWon: boolean;
+  q4Actions: Q4Action[];
+}
+
+export interface Q4Action {
+  clock: string;    // "PT02M30.00S"
+  scoreHome: number;
+  scoreAway: number;
 }
 
 interface CalibrationBucket {
@@ -51,14 +62,28 @@ async function fetchJson(url: string): Promise<any> {
   return data;
 }
 
+function gameDataPath(season: string, gameId: string): string {
+  return path.join(DATA_DIR, season, `${gameId}.json`);
+}
+
+function loadCachedGame(season: string, gameId: string): GameRecord | null {
+  const p = gameDataPath(season, gameId);
+  if (!fs.existsSync(p)) return null;
+  return JSON.parse(fs.readFileSync(p, 'utf-8')) as GameRecord;
+}
+
+function saveGameRecord(record: GameRecord): void {
+  const dir = path.join(DATA_DIR, record.season);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(gameDataPath(record.season, record.gameId), JSON.stringify(record), 'utf-8');
+}
+
 async function fetchGameIds(season: string, maxGames: number): Promise<string[]> {
   const url = `${STATS_BASE}/leaguegamelog?Counter=0&DateFrom=&DateTo=&Direction=DESC&LeagueID=00&PlayerOrTeam=T&Season=${season}&SeasonType=Regular+Season&Sorter=DATE`;
   const data = await fetchJson(url);
   const rs = data.resultSets?.[0];
   if (!rs) throw new Error('leaguegamelog: unexpected response shape');
-  const headers: string[] = rs.headers;
-  const gameIdIdx = headers.indexOf('GAME_ID');
-
+  const gameIdIdx = (rs.headers as string[]).indexOf('GAME_ID');
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const row of rs.rowSet as any[][]) {
@@ -69,26 +94,39 @@ async function fetchGameIds(season: string, maxGames: number): Promise<string[]>
   return ids;
 }
 
-async function fetchQ4Actions(gameId: string): Promise<Action[]> {
+async function fetchAndSaveGame(season: string, gameId: string): Promise<GameRecord | null> {
   const url = `${STATS_BASE}/playbyplayv3?GameID=${gameId}&StartPeriod=4&EndPeriod=4`;
   const data = await fetchJson(url);
   const actions: any[] = data.game?.actions ?? [];
-  return actions
-    .filter((a) => a.period === 4 && a.clock && a.scoreHome !== '' && a.scoreAway !== '')
-    .map((a) => ({ clock: a.clock, period: a.period, scoreHome: String(a.scoreHome), scoreAway: String(a.scoreAway) }));
+
+  const q4 = actions.filter((a) => a.period === 4 && a.clock && a.scoreHome !== '' && a.scoreAway !== '');
+  if (q4.length === 0) return null;
+
+  const last = q4[q4.length - 1];
+  const finalHome = parseInt(last.scoreHome, 10);
+  const finalAway = parseInt(last.scoreAway, 10);
+  if (isNaN(finalHome) || isNaN(finalAway) || finalHome === finalAway) return null; // OT
+
+  const record: GameRecord = {
+    gameId,
+    season,
+    homeWon: finalHome > finalAway,
+    q4Actions: q4.map((a) => ({
+      clock: a.clock,
+      scoreHome: parseInt(a.scoreHome, 10),
+      scoreAway: parseInt(a.scoreAway, 10),
+    })),
+  };
+
+  saveGameRecord(record);
+  return record;
 }
 
-/** "PT02M30.00S" → seconds remaining in Q4 */
-function clockToSeconds(clock: string): number {
-  return WinProbabilityModel.clockToSeconds(clock);
-}
-
-/** Find action closest to targetSec remaining */
-function actionAtTime(actions: Action[], targetSec: number): Action | null {
-  let best: Action | null = null;
+function actionAtTime(record: GameRecord, targetSec: number): Q4Action | null {
+  let best: Q4Action | null = null;
   let bestDiff = Infinity;
-  for (const a of actions) {
-    const diff = Math.abs(clockToSeconds(a.clock) - targetSec);
+  for (const a of record.q4Actions) {
+    const diff = Math.abs(WinProbabilityModel.clockToSeconds(a.clock) - targetSec);
     if (diff < bestDiff) { bestDiff = diff; best = a; }
   }
   return best;
@@ -110,11 +148,12 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const season = args[args.indexOf('--season') + 1] ?? '2024-25';
   const maxGames = parseInt(args[args.indexOf('--games') + 1] ?? '150', 10);
+  const fetchOnly = args.includes('--fetch-only');
 
   const model = new WinProbabilityModel();
-  console.log(`\nBacktest: WinProbabilityModel vs NBA play-by-play (${season}, up to ${maxGames} games)\n`);
+  console.log(`\nBacktest: WinProbabilityModel vs NBA play-by-play (${season}, up to ${maxGames} games)`);
+  console.log(`Data cache: ${path.join(DATA_DIR, season)}\n`);
 
-  console.log('Fetching game list...');
   await sleep(RATE_LIMIT_MS);
   const gameIds = await fetchGameIds(season, maxGames);
   console.log(`Found ${gameIds.length} games\n`);
@@ -124,46 +163,41 @@ async function main(): Promise<void> {
   let brierSum = 0;
   let processed = 0;
   let skipped = 0;
+  let fromCache = 0;
 
   for (let i = 0; i < gameIds.length; i++) {
     const gameId = gameIds[i];
-    process.stdout.write(`\r[${i + 1}/${gameIds.length}] ${gameId} — ${processed} processed, ${skipped} skipped  `);
+    process.stdout.write(`\r[${i + 1}/${gameIds.length}] ${gameId} — ${processed} ok, ${skipped} skipped, ${fromCache} from cache  `);
 
     try {
-      await sleep(RATE_LIMIT_MS);
-      const actions = await fetchQ4Actions(gameId);
-      if (actions.length === 0) { skipped++; continue; }
+      let record = loadCachedGame(season, gameId);
+      if (record) {
+        fromCache++;
+      } else {
+        await sleep(RATE_LIMIT_MS);
+        record = await fetchAndSaveGame(season, gameId);
+      }
 
-      // Determine final result from last action with scores
-      const last = actions[actions.length - 1];
-      const finalHome = parseInt(last.scoreHome, 10);
-      const finalAway = parseInt(last.scoreAway, 10);
-      if (isNaN(finalHome) || isNaN(finalAway) || finalHome === finalAway) { skipped++; continue; } // OT
-      const homeWon = finalHome > finalAway;
+      if (!record) { skipped++; continue; }
+      if (fetchOnly) { processed++; continue; }
 
       for (const targetSec of SAMPLE_SECONDS) {
-        const action = actionAtTime(actions, targetSec);
+        const action = actionAtTime(record, targetSec);
         if (!action) continue;
 
-        const home = parseInt(action.scoreHome, 10);
-        const away = parseInt(action.scoreAway, 10);
-        if (isNaN(home) || isNaN(away)) continue;
-
-        const margin = home - away; // positive = home leading
+        const margin = action.scoreHome - action.scoreAway;
         const secondsLeft = WinProbabilityModel.secondsRemaining(4, action.clock);
         const homeProb = model.calculate(margin, secondsLeft);
         const awayProb = 1 - homeProb;
 
-        // Home team perspective
         const homeBucket = buckets.find((b) => homeProb >= b.lo && homeProb < b.hi);
-        if (homeBucket) { homeBucket.total++; if (homeWon) homeBucket.wins++; }
-        brierSum += (homeProb - (homeWon ? 1 : 0)) ** 2;
+        if (homeBucket) { homeBucket.total++; if (record.homeWon) homeBucket.wins++; }
 
-        // Away team perspective
         const awayBucket = buckets.find((b) => awayProb >= b.lo && awayProb < b.hi);
-        if (awayBucket) { awayBucket.total++; if (!homeWon) awayBucket.wins++; }
-        brierSum += (awayProb - (!homeWon ? 1 : 0)) ** 2;
+        if (awayBucket) { awayBucket.total++; if (!record.homeWon) awayBucket.wins++; }
 
+        brierSum += (homeProb - (record.homeWon ? 1 : 0)) ** 2;
+        brierSum += (awayProb - (!record.homeWon ? 1 : 0)) ** 2;
         totalSamples += 2;
       }
       processed++;
@@ -172,11 +206,17 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`\n\nResults: ${processed} games, ${skipped} skipped, ${totalSamples.toLocaleString()} samples\n`);
+  const cachedCount = fs.existsSync(path.join(DATA_DIR, season))
+    ? fs.readdirSync(path.join(DATA_DIR, season)).length : 0;
+
+  console.log(`\n\nResults: ${processed} games, ${skipped} skipped, ${fromCache} loaded from cache`);
+  console.log(`Cached games on disk: ${cachedCount} in data/nba/${season}/\n`);
+
+  if (fetchOnly) return;
 
   console.log('Calibration — model probability vs empirical win rate:');
   console.log('─'.repeat(65));
-  console.log(`${'Bucket'.padEnd(10)} ${'N'.padStart(6)} ${'Model'.padStart(8)} ${'Actual'.padStart(8)} ${'Error'.padStart(8)} ${'Verdict'}`);
+  console.log(`${'Bucket'.padEnd(10)} ${'N'.padStart(6)} ${'Model'.padStart(8)} ${'Actual'.padStart(8)} ${'Error'.padStart(8)} Verdict`);
   console.log('─'.repeat(65));
 
   for (const b of buckets) {

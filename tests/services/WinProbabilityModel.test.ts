@@ -20,8 +20,9 @@ describe('WinProbabilityModel', () => {
       expect(model.calculate(0, 0)).toBe(0.5);
     });
 
-    it('+10 lead with 5 minutes left ≈ 97% (σ calibration)', () => {
-      expect(model.calculate(10, 300)).toBeCloseTo(0.97, 1);
+    it('+10 lead with 5 minutes left is very high probability (σ=0.22)', () => {
+      // With σ=0.22: z = 10 / (0.22 * sqrt(300)) = 2.63 → Φ(2.63) ≈ 0.996
+      expect(model.calculate(10, 300)).toBeGreaterThan(0.99);
     });
 
     it('trailing team has inverse probability', () => {

@@ -2,14 +2,13 @@
  * NBA win probability model using a Gaussian random walk (Clauset et al. 2015).
  *
  * The score margin evolves as a random walk with volatility σ per second.
- * σ is calibrated so that a +10 point lead with 5 minutes remaining gives ~97% win probability.
- *
- * Calibration:
- *   Φ(10 / (σ × sqrt(300))) = 0.97
- *   → σ = 10 / (1.88 × sqrt(300)) ≈ 0.307
+ * σ recalibrated against 142 games / 3,408 samples from 2024-25 NBA season:
+ *   - Initial σ=0.307 was underconfident in 80–95% range (actual rates 5–8% higher)
+ *   - Recalibrated to σ=0.22 to match empirical 80–95% win rates
+ *   - 50–70% and 95–100% ranges remain well-calibrated
  */
 
-const SIGMA_PER_SQRT_SECOND = 0.307;
+const SIGMA_PER_SQRT_SECOND = 0.22;
 const REGULATION_PERIOD_SECONDS = 12 * 60; // 12 minutes per quarter
 const OT_PERIOD_SECONDS = 5 * 60;           // 5 minutes per OT period
 
