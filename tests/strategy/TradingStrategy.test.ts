@@ -120,12 +120,12 @@ describe('TradingStrategy', () => {
       expect(signal.suggestedContracts).toBe(274);
     });
 
-    it('sizes to 25% of balance at $500 (typical starting balance)', () => {
-      // ask=0.95, balance=$500 (50_000 cents) → 25% = $125 (12_500 cents) → floor(12500/95) = 131
+    it('sizes to 25% of balance at $1000 (current budget)', () => {
+      // ask=0.95, balance=$1000 (100_000 cents) → 25% = $250 (25_000 cents) → floor(25000/95) = 263
       const market = makeMarket({ yesAsk: 0.95 });
-      const signal = strategy.evaluateEntry(market, 50_000);
+      const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
-      expect(signal.suggestedContracts).toBe(131);
+      expect(signal.suggestedContracts).toBe(263);
     });
   });
 

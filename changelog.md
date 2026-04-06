@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.21.0] — 2026-04-06
+
+### Changed
+- Budget increased from $500 → $1,000 (additional deposit). `CLAUDE.md` rule 7 updated to reflect current budget.
+
 ## [1.20.0] — 2026-04-06
 
 ### Fixed
