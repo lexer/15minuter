@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.20.0] — 2026-04-06
+
+### Fixed
+- `TradingStrategy.evaluateEntry`: `MAX_CONTRACTS_PER_TRADE=50` was the binding constraint, capping all trades at ~$45-48 (~10% of balance) instead of the intended 25%. Removed per-contract cap from entry sizing — balance fraction (25%) now governs exclusively.
+- `CLAUDE.md`: updated Trading Strategy rules 3, 4, 7 to match actual implementation (ask/bid price signals, 25% sizing).
+
 ## [1.19.0] — 2026-04-06
 
 ### Fixed

@@ -79,10 +79,10 @@ export class TradingStrategy {
       return { action: 'hold', reason: 'Invalid ask price', market };
     }
 
-    // Size at 10% of balance (no Kelly — market price is the signal)
+    // Size at 25% of balance — no contract count cap, balance fraction governs
     const maxSpendCents = Math.floor(availableBalanceCents * MAX_BALANCE_RISK_FRACTION);
     const costPerContractCents = Math.round(market.yesAsk * 100);
-    const contracts = Math.min(MAX_CONTRACTS_PER_TRADE, Math.floor(maxSpendCents / costPerContractCents));
+    const contracts = Math.floor(maxSpendCents / costPerContractCents);
 
     if (contracts <= 0) {
       return { action: 'hold', reason: 'Insufficient balance for even 1 contract', market };

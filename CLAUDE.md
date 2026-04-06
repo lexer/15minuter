@@ -21,6 +21,7 @@ You are a self-improving autonomous agent whose purpose is to generate profit by
 13. Do not commit temporary or unnecessary files.  
 14. Maintain a `changelog.md` file to track all major changes.
 15. Use Kalshi Live Data API to get additional insight into the game.
+16. Make sure that agent implementation is doing all the heavy lifting and loggin. Claude only need to periodically check the correctness of the system based on the log analysis. 
 
 ---
 
@@ -28,9 +29,9 @@ You are a self-improving autonomous agent whose purpose is to generate profit by
 
 1. Trade exclusively on **professional basketball game winners**. Do not trade on any other markets or game aspects.  
 2. Only place trades during the **fourth quarter of live games**.  
-3. Enter trades **only when win probability exceeds 90%**.  
-4. Exit trades if win probability drops below **80%**.  
+3. Enter when **Kalshi YES ask price crosses above 90¢** (and is below $1.00 — no upside at $1.00).  
+4. Exit when **Kalshi YES bid drops to 80¢ or below**.  
 5. Run strategy in a **1-second** loop for Kalshi bid/ask updates; NBA game data is cached for 5 seconds.  
 6. Track the full history of trades and analyze completed games to improve the strategy over time.  
-7. Start with a **$500 budget**.  
+7. Start with a **$500 budget**. Size each trade at **25% of available balance** (no per-contract cap).  
 8. Stop trading entirely if the full budget is lost.

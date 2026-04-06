@@ -112,18 +112,20 @@ describe('TradingStrategy', () => {
       expect(signal.action).toBe('hold');
     });
 
-    it('caps contracts at MAX_CONTRACTS_PER_TRADE', () => {
+    it('sizes to 25% of balance', () => {
+      // ask=0.91, balance=$1000 (100_000 cents) → 25% = $250 (25_000 cents) → floor(25000/91) = 274
       const market = makeMarket({ yesAsk: 0.91 });
-      const signal = strategy.evaluateEntry(market, 10_000_000);
-      expect(signal.suggestedContracts).toBeLessThanOrEqual(50);
-    });
-
-    it('sizes at 25% of balance regardless of model probability', () => {
-      // ask=0.94, balance=$1000 → 25% = $250 → floor(25000/94) = 265 → capped at 50
-      const market = makeMarket({ yesAsk: 0.94, winProbability: 0.93 });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
-      expect(signal.suggestedContracts).toBe(50);
+      expect(signal.suggestedContracts).toBe(274);
+    });
+
+    it('sizes to 25% of balance at $500 (typical starting balance)', () => {
+      // ask=0.95, balance=$500 (50_000 cents) → 25% = $125 (12_500 cents) → floor(12500/95) = 131
+      const market = makeMarket({ yesAsk: 0.95 });
+      const signal = strategy.evaluateEntry(market, 50_000);
+      expect(signal.action).toBe('buy');
+      expect(signal.suggestedContracts).toBe(131);
     });
   });
 
