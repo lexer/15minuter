@@ -45,12 +45,9 @@ export class MarketService {
       limit: 200,
     });
 
-    const today = this.getTodayDateCode();
     const markets: BasketballMarket[] = [];
 
     for (const m of response.markets) {
-      // Only consider today's games
-      if (!m.event_ticker?.includes(today)) continue;
 
       const parsed = this.parseMarket(m);
       if (!parsed) continue;
@@ -97,15 +94,6 @@ export class MarketService {
     }
 
     return parsed;
-  }
-
-  private getTodayDateCode(): string {
-    const now = new Date();
-    const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-    const yy = String(now.getUTCFullYear()).slice(2);
-    const mon = months[now.getUTCMonth()];
-    const dd = String(now.getUTCDate()).padStart(2, '0');
-    return `${yy}${mon}${dd}`;
   }
 
   // Extract two 3-letter team codes from event ticker e.g. "KXNBAGAME-26APR05HOUGSW" → {team1:"HOU", team2:"GSW"}

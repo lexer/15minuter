@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.17.0] — 2026-04-06
+
+### Fixed
+- `MarketService`: removed UTC date filter that silently dropped overnight games. A game starting April 5th has ticker `26APR05...` but after midnight UTC the filter expected `26APR06...`, causing IND@CLE Q4 markets to be missed entirely. Filter removed — `isQ4OrLater` game state check is the correct gate.
+
 ## [1.16.0] — 2026-04-05
 
 ### Changed

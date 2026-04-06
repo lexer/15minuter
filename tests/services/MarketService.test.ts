@@ -129,15 +129,16 @@ describe('MarketService', () => {
     expect(markets[0].winProbability).toBeLessThan(1.0);
   });
 
-  it('excludes markets from other dates', async () => {
-    const tomorrowMarket = makeRawMarket({
-      ticker: 'KXNBAGAME-26APR06HOUGSW-HOU',
-      event_ticker: 'KXNBAGAME-26APR06HOUGSW',
+  it('includes markets from any date as long as game is in Q4', async () => {
+    // Date filter removed — a game that started yesterday but is still live in Q4 must be included
+    const prevDayMarket = makeRawMarket({
+      ticker: 'KXNBAGAME-26APR05INDCLE-CLE',
+      event_ticker: 'KXNBAGAME-26APR05INDCLE',
     });
-    const client = mockClient([tomorrowMarket]);
+    const client = mockClient([prevDayMarket]);
     const monitor = mockGameMonitor();
     const service = new MarketService(client, monitor);
     const markets = await service.getLiveBasketballMarkets();
-    expect(markets).toHaveLength(0);
+    expect(markets).toHaveLength(1);
   });
 });
