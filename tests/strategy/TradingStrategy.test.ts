@@ -1,4 +1,4 @@
-import { TradingStrategy, ENTRY_PROBABILITY_THRESHOLD, EXIT_PROBABILITY_THRESHOLD } from '../../src/strategy/TradingStrategy';
+import { TradingStrategy, ENTRY_PROBABILITY_THRESHOLD, EXIT_PROBABILITY_THRESHOLD, EXIT_PROBABILITY_GUARD, EXIT_CONFIRMATION_TICKS } from '../../src/strategy/TradingStrategy';
 import { BasketballMarket } from '../../src/services/MarketService';
 
 function makeMarket(overrides: Partial<BasketballMarket> = {}): BasketballMarket {
@@ -130,10 +130,52 @@ describe('TradingStrategy', () => {
   });
 
   describe('evaluateExit', () => {
-    it('returns sell when bid drops below exit threshold', () => {
-      const market = makeMarket({ yesBid: 0.75 });
+    it('holds on first low-bid tick (confirmation window)', () => {
+      const market = makeMarket({ yesBid: 0.75, winProbability: 0.75 });
+      const signal = strategy.evaluateExit(market, 5);
+      expect(signal.action).toBe('hold');
+      expect(signal.reason).toMatch(/confirming \(1\//);
+    });
+
+    it('sells after EXIT_CONFIRMATION_TICKS consecutive low-bid ticks', () => {
+      const market = makeMarket({ yesBid: 0.75, winProbability: 0.75 });
+      for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
+        expect(strategy.evaluateExit(market, 5).action).toBe('hold');
+      }
       const signal = strategy.evaluateExit(market, 5);
       expect(signal.action).toBe('sell');
+    });
+
+    it('resets confirmation counter when bid recovers', () => {
+      const lowMarket = makeMarket({ yesBid: 0.75, winProbability: 0.75 });
+      const highMarket = makeMarket({ yesBid: 0.88, winProbability: 0.88 });
+
+      // Two ticks below threshold
+      strategy.evaluateExit(lowMarket, 5);
+      strategy.evaluateExit(lowMarket, 5);
+      // Bid recovers — counter resets
+      strategy.evaluateExit(highMarket, 5);
+      // Needs full confirmation window again
+      for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
+        expect(strategy.evaluateExit(lowMarket, 5).action).toBe('hold');
+      }
+      expect(strategy.evaluateExit(lowMarket, 5).action).toBe('sell');
+    });
+
+    it('holds when bid is low but model probability is above guard', () => {
+      const market = makeMarket({ yesBid: 0.72, winProbability: EXIT_PROBABILITY_GUARD + 0.01 });
+      // Should never sell regardless of ticks
+      for (let i = 0; i < EXIT_CONFIRMATION_TICKS + 2; i++) {
+        expect(strategy.evaluateExit(market, 5).action).toBe('hold');
+      }
+    });
+
+    it('sells when both bid is low and probability is below guard', () => {
+      const market = makeMarket({ yesBid: 0.72, winProbability: EXIT_PROBABILITY_GUARD - 0.01 });
+      for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
+        expect(strategy.evaluateExit(market, 5).action).toBe('hold');
+      }
+      expect(strategy.evaluateExit(market, 5).action).toBe('sell');
     });
 
     it('returns hold when bid stays above exit threshold', () => {
@@ -148,11 +190,12 @@ describe('TradingStrategy', () => {
       expect(signal.action).toBe('sell');
     });
 
-    it('returns sell at exactly exit threshold', () => {
-      // bid == threshold → sell (need bid strictly above threshold to hold)
-      const market = makeMarket({ yesBid: EXIT_PROBABILITY_THRESHOLD });
-      const signal = strategy.evaluateExit(market, 5);
-      expect(signal.action).toBe('sell');
+    it('returns sell at exactly exit threshold after confirmation', () => {
+      const market = makeMarket({ yesBid: EXIT_PROBABILITY_THRESHOLD, winProbability: 0.75 });
+      for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
+        expect(strategy.evaluateExit(market, 5).action).toBe('hold');
+      }
+      expect(strategy.evaluateExit(market, 5).action).toBe('sell');
     });
   });
 

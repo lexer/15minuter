@@ -110,6 +110,7 @@ export class TradingAgent {
 
         if (signal.action === 'sell') {
           console.log(`[Agent] EXIT ${record.ticker}: ${signal.reason}`);
+          this.strategy.clearExitConfirmation(record.ticker);
           const orderId = await this.executeExit(record, market, signal.suggestedLimitPrice ?? market.yesBid);
           this.analysis.logDecision({
             type: 'exit',

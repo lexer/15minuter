@@ -2,6 +2,8 @@ import { BasketballMarket } from '../services/MarketService';
 
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;
+export const EXIT_PROBABILITY_GUARD = 0.85; // don't exit on bid dip if model prob is above this
+export const EXIT_CONFIRMATION_TICKS = 3;   // consecutive ticks below bid threshold required to exit
 export const MAX_CONTRACTS_PER_TRADE = 50;
 
 // Quarter-Kelly: risk this fraction of balance per trade, scaled by edge
@@ -19,8 +21,14 @@ export interface TradeSignal {
 }
 
 export class TradingStrategy {
+  private readonly lowBidCounts = new Map<string, number>();
+
   private isTradeable(status: string): boolean {
     return status === 'open' || status === 'active';
+  }
+
+  clearExitConfirmation(ticker: string): void {
+    this.lowBidCounts.delete(ticker);
   }
 
   /**
@@ -101,17 +109,8 @@ export class TradingStrategy {
   }
 
   evaluateExit(market: BasketballMarket, heldContracts: number): TradeSignal {
-    if (market.yesBid <= EXIT_PROBABILITY_THRESHOLD) {
-      return {
-        action: 'sell',
-        reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ below exit threshold ${EXIT_PROBABILITY_THRESHOLD * 100}¢`,
-        market,
-        suggestedContracts: heldContracts,
-        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
-      };
-    }
-
     if (!this.isTradeable(market.status)) {
+      this.lowBidCounts.delete(market.ticker);
       return {
         action: 'sell',
         reason: `Market ${market.status} — closing position`,
@@ -121,6 +120,41 @@ export class TradingStrategy {
       };
     }
 
+    if (market.yesBid <= EXIT_PROBABILITY_THRESHOLD) {
+      // Probability guard: suppress exit if model still shows high confidence
+      if (market.winProbability >= EXIT_PROBABILITY_GUARD) {
+        this.lowBidCounts.delete(market.ticker);
+        return {
+          action: 'hold',
+          reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ below threshold but prob=${(market.winProbability * 100).toFixed(1)}% above guard ${EXIT_PROBABILITY_GUARD * 100}% — ignoring dip`,
+          market,
+        };
+      }
+
+      // Confirmation window: require N consecutive low-bid ticks
+      const count = (this.lowBidCounts.get(market.ticker) ?? 0) + 1;
+      this.lowBidCounts.set(market.ticker, count);
+
+      if (count < EXIT_CONFIRMATION_TICKS) {
+        return {
+          action: 'hold',
+          reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ below threshold — confirming (${count}/${EXIT_CONFIRMATION_TICKS})`,
+          market,
+        };
+      }
+
+      this.lowBidCounts.delete(market.ticker);
+      return {
+        action: 'sell',
+        reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ below exit threshold for ${EXIT_CONFIRMATION_TICKS} ticks`,
+        market,
+        suggestedContracts: heldContracts,
+        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
+      };
+    }
+
+    // Bid recovered — reset counter
+    this.lowBidCounts.delete(market.ticker);
     return { action: 'hold', reason: `Hold — bid ${(market.yesBid * 100).toFixed(0)}¢ above exit threshold`, market };
   }
 
