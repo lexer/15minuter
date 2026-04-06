@@ -71,6 +71,10 @@ export class TradingStrategy {
       };
     }
 
+    if (market.yesAsk >= 1.0) {
+      return { action: 'hold', reason: 'Ask at $1.00 — no upside', market };
+    }
+
     if (market.yesAsk <= 0) {
       return { action: 'hold', reason: 'Invalid ask price', market };
     }

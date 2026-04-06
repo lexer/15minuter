@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.19.0] — 2026-04-06
+
+### Fixed
+- `TradingStrategy.evaluateEntry`: reject ask ≥ $1.00 — buying at $1.00 pays face value with zero upside. OKC market hit $1.00 (blowout vs UTA) and agent attempted entry.
+
 ## [1.18.0] — 2026-04-06
 
 ### Changed
