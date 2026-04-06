@@ -7,8 +7,8 @@ export const MAX_CONTRACTS_PER_TRADE = 50;
 // Quarter-Kelly: risk this fraction of balance per trade, scaled by edge
 const KELLY_FRACTION = 0.25;
 
-// Never risk more than 10% of current balance on a single trade
-const MAX_BALANCE_RISK_FRACTION = 0.1;
+// Risk at least 25% of current balance on a single trade
+const MAX_BALANCE_RISK_FRACTION = 0.25;
 
 export interface TradeSignal {
   action: 'buy' | 'sell' | 'hold';

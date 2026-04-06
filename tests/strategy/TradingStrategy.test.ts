@@ -73,7 +73,7 @@ describe('TradingStrategy', () => {
 
   describe('evaluateEntry', () => {
     it('returns buy when ask exceeds threshold', () => {
-      // ask=0.94 > 0.90 → buy at 10% of balance
+      // ask=0.94 > 0.90 → buy at 25% of balance
       const market = makeMarket({ yesAsk: 0.94 });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
@@ -107,7 +107,7 @@ describe('TradingStrategy', () => {
 
     it('returns hold when balance is too small for 1 contract', () => {
       const market = makeMarket({ yesAsk: 0.94 });
-      // balance=50 cents → 10% = 5 cents, can't afford $0.94
+      // balance=50 cents → 25% = 12 cents, can't afford $0.94
       const signal = strategy.evaluateEntry(market, 50);
       expect(signal.action).toBe('hold');
     });
@@ -118,8 +118,8 @@ describe('TradingStrategy', () => {
       expect(signal.suggestedContracts).toBeLessThanOrEqual(50);
     });
 
-    it('sizes at 10% of balance regardless of model probability', () => {
-      // ask=0.94, balance=$1000 → 10% = $100 → floor(10000/94) = 106 → capped at 50
+    it('sizes at 25% of balance regardless of model probability', () => {
+      // ask=0.94, balance=$1000 → 25% = $250 → floor(25000/94) = 265 → capped at 50
       const market = makeMarket({ yesAsk: 0.94, winProbability: 0.93 });
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');

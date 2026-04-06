@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.18.0] — 2026-04-06
+
+### Changed
+- `TradingStrategy`: trade size raised from 10% → 25% of balance per entry
+
 ## [1.17.0] — 2026-04-06
 
 ### Fixed
