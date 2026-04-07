@@ -176,10 +176,18 @@ export class AnalysisLogger {
   finalizeTick(summary: { totalTrades: number; totalPnl: number; winRate: number }): void {
     const decisions = this.pendingTick.decisions ?? [];
     const openPositions = this.pendingTick.openPositions ?? [];
+    const games = this.pendingTick.games ?? [];
+
+    // Skip writing if nothing interesting happened this tick
+    if (games.length === 0 && decisions.length === 0 && openPositions.length === 0) {
+      this.pendingTick = {};
+      return;
+    }
+
     const tick: Record<string, unknown> = {
       timestamp: this.pendingTick.timestamp ?? new Date().toISOString(),
       balanceDollars: this.pendingTick.balanceDollars ?? 0,
-      games: this.pendingTick.games ?? [],
+      games,
       summary: {
         totalTrades: summary.totalTrades,
         totalPnl: Math.round(summary.totalPnl * 100) / 100,
