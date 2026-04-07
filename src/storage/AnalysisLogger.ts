@@ -12,7 +12,8 @@ function extractTeam(ticker: string): string {
 export interface MarketSnapshot {
   team: string;
   winProbability: number | null; // model probability (null pre-game — no score/time data)
-  kalshiMid: number;             // (bid + ask) / 2 — market-implied win probability
+  ask: number;
+  bid: number;
 }
 
 export interface GameAnalysis {
@@ -127,7 +128,8 @@ export class AnalysisLogger {
         markets: gameMarkets.map((m) => ({
           team: extractTeam(m.ticker),
           winProbability: g.period > 0 ? m.winProbability : null,
-          kalshiMid: (m.yesAsk + m.yesBid) / 2,
+          ask: m.yesAsk,
+          bid: m.yesBid,
         })),
       };
     });
@@ -153,7 +155,8 @@ export class AnalysisLogger {
         markets: eventMarkets.map((m) => ({
           team: extractTeam(m.ticker),
           winProbability: null,
-          kalshiMid: (m.yesAsk + m.yesBid) / 2,
+          ask: m.yesAsk,
+          bid: m.yesBid,
         })),
       });
     }
