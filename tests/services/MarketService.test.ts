@@ -109,13 +109,15 @@ describe('MarketService', () => {
     expect(markets[0].yesAsk).toBeCloseTo(0.94);
   });
 
-  it('overrides winProbability with model when game state available', async () => {
-    // LAL +17 with 2:30 left → model gives >>92% (market mid), so model overrides
+  it('blends model and market mid when game state available', async () => {
+    // LAL +17 with 2:30 left → model ≈ 1.0, market mid ≈ 0.93
+    // blended = 0.7 × ~1.0 + 0.3 × ~0.93 ≈ 0.979 — above market mid, below pure model
     const client = mockClient([makeRawMarket()]);
     const monitor = mockGameMonitor(makeGameState({ homeScore: 105, awayScore: 88, gameClock: 'PT02M30.00S' }));
     const service = new MarketService(client, monitor);
     const markets = await service.getLiveBasketballMarkets();
-    expect(markets[0].winProbability).toBeGreaterThan(0.99);
+    expect(markets[0].winProbability).toBeGreaterThan(0.93); // above market mid
+    expect(markets[0].winProbability).toBeLessThan(1.0);     // below pure model
   });
 
   it('falls back to market mid when no game state', async () => {
