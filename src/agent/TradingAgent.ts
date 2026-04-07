@@ -42,7 +42,6 @@ export class TradingAgent {
 
     if (this.portfolio.isBudgetExhausted(balanceCents)) {
       console.log('[Agent] Budget exhausted — halting.');
-      this.analysis.finalizeTick(this.history.getSummary());
       return;
     }
 
@@ -51,12 +50,19 @@ export class TradingAgent {
     const allMarkets = await this.markets.getAllLiveBasketballMarkets();
     this.analysis.logGames(allGames, allMarkets);
 
+    const openTrades = this.history.getOpenTrades();
     await this.manageOpenPositions();
     await this.scanForEntries(balanceCents, allMarkets.filter((m) => m.isQ4));
 
     const summary = this.history.getSummary();
     this.logSummary(summary);
-    this.analysis.finalizeTick(summary);
+
+    // Only finalize (write) the tick if there is something worth logging
+    const hasLiveGames = allGames.length > 0;
+    const hasOpenPositions = openTrades.length > 0;
+    if (hasLiveGames || hasOpenPositions) {
+      this.analysis.finalizeTick(summary);
+    }
   }
 
   async start(): Promise<void> {
