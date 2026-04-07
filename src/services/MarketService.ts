@@ -44,15 +44,10 @@ export class MarketService {
 
   /** Returns all live KXNBAGAME markets regardless of quarter, with isQ4 flag set. */
   async getAllLiveBasketballMarkets(): Promise<BasketballMarket[]> {
-    const response = await this.client.getMarkets({
-      series_ticker: 'KXNBAGAME',
-      status: 'open',
-      limit: 200,
-    });
-
+    const rawMarkets = await this.fetchAllMarkets();
     const markets: BasketballMarket[] = [];
 
-    for (const m of response.markets) {
+    for (const m of rawMarkets) {
       const parsed = this.parseMarket(m);
       if (!parsed) continue;
 
@@ -74,6 +69,23 @@ export class MarketService {
     }
 
     return markets;
+  }
+
+  /** Fetches all pages of open KXNBAGAME markets. */
+  private async fetchAllMarkets(): Promise<import('../api/types').KalshiMarket[]> {
+    const all: import('../api/types').KalshiMarket[] = [];
+    let cursor: string | undefined;
+    do {
+      const response = await this.client.getMarkets({
+        series_ticker: 'KXNBAGAME',
+        status: 'open',
+        limit: 200,
+        cursor,
+      });
+      all.push(...response.markets);
+      cursor = response.cursor || undefined;
+    } while (cursor);
+    return all;
   }
 
   /** Returns only markets where the game is in Q4 or later. */
