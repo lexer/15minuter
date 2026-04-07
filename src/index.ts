@@ -7,14 +7,28 @@ dotenv.config();
 // ── Single-instance lock via PID file ────────────────────────────────────────
 const PID_FILE = path.resolve(process.cwd(), 'agent.pid');
 
+import { execSync } from 'child_process';
+
+function isAgentProcess(pid: number): boolean {
+  try {
+    const cmd = execSync(`ps -p ${pid} -o args=`, { encoding: 'utf-8' }).trim();
+    return cmd.includes('dist/index.js');
+  } catch {
+    return false;
+  }
+}
+
 function acquireLock(): void {
   if (fs.existsSync(PID_FILE)) {
     const existingPid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
-    if (!isNaN(existingPid)) {
+    if (!isNaN(existingPid) && existingPid !== process.pid) {
       try {
         process.kill(existingPid, 0); // throws if process does not exist
-        console.error(`[Main] Agent already running (PID ${existingPid}). Exiting.`);
-        process.exit(1);
+        if (isAgentProcess(existingPid)) {
+          console.error(`[Main] Agent already running (PID ${existingPid}). Exiting.`);
+          process.exit(1);
+        }
+        // PID exists but belongs to a different process — stale, overwrite
       } catch {
         // Stale PID file — previous process is gone, safe to overwrite
       }
