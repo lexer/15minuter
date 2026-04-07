@@ -15,6 +15,7 @@ export class TradingAgent {
   private readonly analysis = new AnalysisLogger();
   private cachedBalanceCents = 0;
   private lastBalanceFetch = 0;
+  private lastLoggedBalanceCents = -1;
 
   constructor(
     private readonly markets: MarketService,
@@ -34,7 +35,10 @@ export class TradingAgent {
     const balanceCents = this.cachedBalanceCents;
     this.analysis.startTick(balanceCents);
 
-    console.log(`[Agent] ${new Date().toISOString()} | Balance: $${(balanceCents / 100).toFixed(2)}`);
+    if (balanceCents !== this.lastLoggedBalanceCents) {
+      console.log(`[Agent] ${new Date().toISOString()} | Balance: $${(balanceCents / 100).toFixed(2)}`);
+      this.lastLoggedBalanceCents = balanceCents;
+    }
 
     if (this.portfolio.isBudgetExhausted(balanceCents)) {
       console.log('[Agent] Budget exhausted — halting.');
