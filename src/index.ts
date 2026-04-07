@@ -4,12 +4,29 @@ import * as path from 'path';
 
 dotenv.config();
 
-// Redirect stdout/stderr to a PST-dated log file so one file = one NBA game day
+// Redirect stdout to a PST-dated agent log; stderr to a dedicated errors.log
 const pstDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 const logPath = path.resolve(process.cwd(), `agent_${pstDate}.log`);
+const errorLogPath = path.resolve(process.cwd(), 'errors.log');
+
 const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+const errorStream = fs.createWriteStream(errorLogPath, { flags: 'a' });
+
 process.stdout.write = logStream.write.bind(logStream);
-process.stderr.write = logStream.write.bind(logStream);
+process.stderr.write = (chunk: string | Uint8Array, ...args: unknown[]) => {
+  const ts = new Date().toISOString();
+  const line = `[${ts}] ${chunk}`;
+  errorStream.write(line);
+  logStream.write(line);  // also mirror to agent log for context
+  return true;
+};
+
+function closeStreams(): void {
+  logStream.end();
+  errorStream.end();
+}
+
+process.on('exit', closeStreams);
 
 import { KalshiClient } from './api/KalshiClient';
 import { MarketService } from './services/MarketService';
@@ -45,20 +62,19 @@ function main(): void {
     gameMonitor,
   );
 
-  process.on('SIGINT', () => {
-    console.log('\n[Main] Received SIGINT — shutting down...');
+  const shutdown = (signal: string) => {
+    console.log(`\n[Main] Received ${signal} — shutting down...`);
     agent.stop();
+    closeStreams();
     process.exit(0);
-  });
+  };
 
-  process.on('SIGTERM', () => {
-    console.log('\n[Main] Received SIGTERM — shutting down...');
-    agent.stop();
-    process.exit(0);
-  });
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   agent.start().catch((err) => {
     console.error('[Main] Fatal error:', err);
+    closeStreams();
     process.exit(1);
   });
 }

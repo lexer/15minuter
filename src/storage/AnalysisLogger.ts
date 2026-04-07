@@ -188,7 +188,9 @@ export class AnalysisLogger {
     };
     if (decisions.length > 0) tick.decisions = decisions;
     if (openPositions.length > 0) tick.openPositions = openPositions;
-    fs.appendFileSync(dailyLogPath('analysis'), JSON.stringify(tick) + '\n', 'utf-8');
+    fs.appendFile(dailyLogPath('analysis'), JSON.stringify(tick) + '\n', 'utf-8', (err) => {
+      if (err) process.stderr.write(`[AnalysisLogger] Failed to write tick: ${err.message}\n`);
+    });
     this.pendingTick = {};
   }
 }
