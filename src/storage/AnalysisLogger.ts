@@ -114,52 +114,27 @@ export class AnalysisLogger {
       }
     }
 
-    // Build entries for live/final games
-    const entries: GameAnalysis[] = games.map((g) => {
-      const key = `${g.awayTeamTricode}@${g.homeTeamTricode}`;
-      const gameMarkets = marketsByGameKey.get(key) ?? [];
-      return {
-        matchup: key,
-        period: g.period,
-        clock: g.gameClock,
-        score: `${g.awayScore}-${g.homeScore}`,
-        isQ4: g.isQ4OrLater,
-        status: g.gameStatus === 1 ? 'upcoming' : g.gameStatus === 3 ? 'final' : 'live',
-        markets: gameMarkets.map((m) => ({
-          team: extractTeam(m.ticker),
-          winProbability: g.period > 0 ? m.winProbability : null,
-          ask: m.yesAsk,
-          bid: m.yesBid,
-        })),
-      };
-    });
-
-    // Append pre-game Kalshi markets not matched to a live game, grouped by event
-    const byEvent = new Map<string, BasketballMarket[]>();
-    for (const m of pregameMarkets) {
-      const arr = byEvent.get(m.eventTicker) ?? [];
-      arr.push(m);
-      byEvent.set(m.eventTicker, arr);
-    }
-    for (const [eventTicker, eventMarkets] of byEvent) {
-      const codes = eventTicker.match(/\d{2}[A-Z]{3}\d{2}([A-Z]{3})([A-Z]{3})$/);
-      const away = codes?.[1] ?? '';
-      const home = codes?.[2] ?? '';
-      entries.push({
-        matchup: `${away}@${home}`,
-        period: 0,
-        clock: '',
-        score: '',
-        isQ4: false,
-        status: 'upcoming',
-        markets: eventMarkets.map((m) => ({
-          team: extractTeam(m.ticker),
-          winProbability: null,
-          ask: m.yesAsk,
-          bid: m.yesBid,
-        })),
+    // Only log games that are currently live
+    const entries: GameAnalysis[] = games
+      .filter((g) => g.gameStatus !== 1 && g.gameStatus !== 3)
+      .map((g) => {
+        const key = `${g.awayTeamTricode}@${g.homeTeamTricode}`;
+        const gameMarkets = marketsByGameKey.get(key) ?? [];
+        return {
+          matchup: key,
+          period: g.period,
+          clock: g.gameClock,
+          score: `${g.awayScore}-${g.homeScore}`,
+          isQ4: g.isQ4OrLater,
+          status: 'live' as const,
+          markets: gameMarkets.map((m) => ({
+            team: extractTeam(m.ticker),
+            winProbability: g.period > 0 ? m.winProbability : null,
+            ask: m.yesAsk,
+            bid: m.yesBid,
+          })),
+        };
       });
-    }
 
     this.pendingTick.games = entries;
   }
