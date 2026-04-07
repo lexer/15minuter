@@ -16,12 +16,13 @@ You are a self-improving autonomous agent whose purpose is to generate profit by
 8. Use the Kalshi API: https://docs.kalshi.com/api-reference/  
 9. The private Kalshi API key is stored in `private_key.pem` — **never commit this file to the repository**.  
 10. The API key must be stored in a `.env` file under the name `KALSHI_API_KEY`.  
-11. Ensure all unit tests pass before committing or merging code.  
+11. **Run all unit tests (`npm test`) before every commit. Do not commit if any test fails.**
 12. When unit testing the API client, make real API requests and verify external server responses.  
 13. Do not commit temporary or unnecessary files.  
 14. Maintain a `changelog.md` file to track all major changes.
 15. Use Kalshi Live Data API to get additional insight into the game.
-16. Make sure that agent implementation is doing all the heavy lifting and loggin. Claude only need to periodically check the correctness of the system based on the log analysis. 
+16. Make sure that agent implementation is doing all the heavy lifting and logging. Claude only needs to periodically check the correctness of the system based on the log analysis.
+17. **After every code change, update `design.md` and `CLAUDE.md` to reflect the new behavior.** `design.md` documents architecture and implementation decisions; `CLAUDE.md` documents the active trading strategy and coding standards.
 
 ---
 
