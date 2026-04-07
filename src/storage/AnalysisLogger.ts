@@ -102,7 +102,7 @@ export class AnalysisLogger {
     }
 
     this.pendingTick.games = games
-      .filter((g) => g.gameStatus !== 1 && g.gameStatus !== 3)
+      .filter((g) => g.gameStatus === 2)
       .map((g) => {
         const key = `${g.awayTeamTricode}@${g.homeTeamTricode}`;
         const gameMarkets = marketsByGameKey.get(key) ?? [];
