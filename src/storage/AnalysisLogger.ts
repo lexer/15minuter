@@ -31,7 +31,6 @@ export interface GameAnalysis {
   period: number;
   clock: string;          // formatted "mm:ss"
   score: string;
-  isQ4: boolean;
   markets: MarketSnapshot[];
 }
 
@@ -39,8 +38,8 @@ export interface TickAnalysis {
   timestamp: string;
   balanceDollars: number;
   games: GameAnalysis[];
-  decisions: DecisionLog[];
-  openPositions: PositionAnalysis[];
+  decisions?: DecisionLog[];
+  openPositions?: PositionAnalysis[];
   summary: { totalTrades: number; totalPnl: number; winRate: number };
 }
 
@@ -62,7 +61,7 @@ export interface PositionAnalysis {
   entryProb: number;
   entryTime: string;
   currentProb?: number;
-  kalshiAskProb?: number;
+  ask?: number;
   unrealizedPnl?: number;
 }
 
@@ -112,7 +111,6 @@ export class AnalysisLogger {
           period: g.period,
           clock: GameMonitor.formatClock(g.gameClock),
           score: `${g.awayScore}-${g.homeScore}`,
-          isQ4: g.isQ4OrLater,
           markets: gameMarkets.map((m) => ({
             team: extractTeam(m.ticker),
             winProbability: g.period > 0 ? r4(m.winProbability) : null,
@@ -128,6 +126,9 @@ export class AnalysisLogger {
    * Avoids duplicating winProbability/ask/bid already logged in the game entry.
    */
   logMarketEval(market: BasketballMarket, signal: TradeSignal): void {
+    // Skip signal logging for blowout markets — noise when ask is near 0 or 1
+    if (market.yesAsk <= 0.10 || market.yesAsk >= 0.99) return;
+
     const team = extractTeam(market.ticker);
     for (const game of this.pendingTick.games ?? []) {
       const snapshot = game.markets.find((m) => m.team === team);
@@ -144,6 +145,8 @@ export class AnalysisLogger {
   }
 
   logDecision(decision: DecisionLog): void {
+    // Only log entry/exit decisions — hold decisions are redundant with signal in markets
+    if (decision.type === 'hold') return;
     this.pendingTick.decisions = this.pendingTick.decisions ?? [];
     this.pendingTick.decisions.push(decision);
   }
@@ -152,7 +155,7 @@ export class AnalysisLogger {
     this.pendingTick.openPositions = trades.map((t) => {
       const market = markets.get(t.ticker);
       const currentProb = market?.winProbability !== undefined ? r4(market.winProbability) : undefined;
-      const kalshiAskProb = market?.yesAsk;
+      const ask = market?.yesAsk;
       const unrealizedPnl = currentProb !== undefined
         ? Math.round((currentProb - t.pricePerContract) * t.contracts * 100) / 100
         : undefined;
@@ -164,25 +167,27 @@ export class AnalysisLogger {
         entryProb: r4(t.winProbabilityAtEntry),
         entryTime: t.entryTime,
         currentProb,
-        kalshiAskProb,
+        ask,
         unrealizedPnl,
       };
     });
   }
 
   finalizeTick(summary: { totalTrades: number; totalPnl: number; winRate: number }): void {
-    const tick: TickAnalysis = {
+    const decisions = this.pendingTick.decisions ?? [];
+    const openPositions = this.pendingTick.openPositions ?? [];
+    const tick: Record<string, unknown> = {
       timestamp: this.pendingTick.timestamp ?? new Date().toISOString(),
       balanceDollars: this.pendingTick.balanceDollars ?? 0,
       games: this.pendingTick.games ?? [],
-      decisions: this.pendingTick.decisions ?? [],
-      openPositions: this.pendingTick.openPositions ?? [],
       summary: {
         totalTrades: summary.totalTrades,
         totalPnl: Math.round(summary.totalPnl * 100) / 100,
         winRate: r4(summary.winRate),
       },
     };
+    if (decisions.length > 0) tick.decisions = decisions;
+    if (openPositions.length > 0) tick.openPositions = openPositions;
     fs.appendFileSync(dailyLogPath('analysis'), JSON.stringify(tick) + '\n', 'utf-8');
     this.pendingTick = {};
   }
