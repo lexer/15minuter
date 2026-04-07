@@ -15,6 +15,8 @@ function makeGameState(overrides: Partial<NbaGameState> = {}): NbaGameState {
     isQ4OrLater: true,
     homeTeamTricode: 'LAL',
     awayTeamTricode: 'BOS',
+    homeTimeoutsRemaining: 2,
+    awayTimeoutsRemaining: 1,
     ...overrides,
   };
 }

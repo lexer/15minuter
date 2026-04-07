@@ -42,6 +42,33 @@ describe('WinProbabilityModel', () => {
     it('probability increases as lead grows with same time', () => {
       expect(model.calculate(3, 120)).toBeLessThan(model.calculate(8, 120));
     });
+
+    it('timeout adjustment has no effect outside final 2 minutes', () => {
+      const withTimeouts = model.calculate(5, 180, 3, 0);
+      const without = model.calculate(5, 180);
+      expect(withTimeouts).toBeCloseTo(without, 5);
+    });
+
+    it('trailing team with extra timeouts increases effective seconds (lower win prob for leader)', () => {
+      // Leading team: scoreDiff=+5, 60s left, opposing (trailing) has 2 extra timeouts
+      // Extra timeouts → +28s effective → more variance → leader's prob should drop slightly
+      const withExtraTimeouts = model.calculate(5, 60, 0, 2);
+      const withoutTimeouts = model.calculate(5, 60, 0, 0);
+      expect(withExtraTimeouts).toBeLessThan(withoutTimeouts);
+    });
+
+    it('leading team with extra timeouts has no adjustment (trailing team at 0)', () => {
+      // Leading team has 2 timeouts, trailing has 0 — no advantage for trailing
+      const withLeadingTimeouts = model.calculate(5, 60, 2, 0);
+      const withoutTimeouts = model.calculate(5, 60, 0, 0);
+      expect(withLeadingTimeouts).toBeCloseTo(withoutTimeouts, 5);
+    });
+
+    it('equal timeouts produce no adjustment', () => {
+      const withEqual = model.calculate(5, 60, 2, 2);
+      const without = model.calculate(5, 60, 0, 0);
+      expect(withEqual).toBeCloseTo(without, 5);
+    });
   });
 
   describe('clockToSeconds', () => {

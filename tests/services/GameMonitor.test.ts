@@ -31,12 +31,22 @@ const MOCK_SCOREBOARD = {
   },
 };
 
+const MOCK_BOXSCORE = (home: number, away: number) => ({
+  game: {
+    homeTeam: { timeoutsRemaining: home },
+    awayTeam: { timeoutsRemaining: away },
+  },
+});
+
 describe('GameMonitor', () => {
   beforeEach(() => {
-    jest.spyOn(global, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => MOCK_SCOREBOARD,
-    } as Response);
+    jest.spyOn(global, 'fetch').mockImplementation(async (url: Parameters<typeof fetch>[0]) => {
+      const urlStr = url.toString();
+      if (urlStr.includes('boxscore')) {
+        return { ok: true, json: async () => MOCK_BOXSCORE(2, 1) } as Response;
+      }
+      return { ok: true, json: async () => MOCK_SCOREBOARD } as Response;
+    });
   });
 
   afterEach(() => {
@@ -88,10 +98,27 @@ describe('GameMonitor', () => {
     expect(state).toBeNull();
   });
 
+  it('populates timeoutsRemaining from boxscore for live games', async () => {
+    const monitor = new GameMonitor();
+    const games = await monitor.getLiveGames();
+    const q4 = games.find((g) => g.homeTeamTricode === 'LAL');
+    expect(q4?.homeTimeoutsRemaining).toBe(2);
+    expect(q4?.awayTimeoutsRemaining).toBe(1);
+  });
+
+  it('leaves timeouts at 0 for non-live games', async () => {
+    const monitor = new GameMonitor();
+    const games = await monitor.getLiveGames();
+    const finished = games.find((g) => g.homeTeamTricode === 'MIA');
+    expect(finished?.homeTimeoutsRemaining).toBe(0);
+    expect(finished?.awayTimeoutsRemaining).toBe(0);
+  });
+
   it('caches results within TTL', async () => {
     const monitor = new GameMonitor();
     await monitor.getLiveGames();
+    const callCount = (fetch as jest.Mock).mock.calls.length;
     await monitor.getLiveGames();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((fetch as jest.Mock).mock.calls.length).toBe(callCount); // no new calls
   });
 });

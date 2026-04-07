@@ -144,7 +144,19 @@ export class MarketService {
     }
 
     const secondsLeft = WinProbabilityModel.secondsRemaining(gameState.period, gameState.gameClock);
-    return this.winModel.calculate(scoreDiff, secondsLeft);
+
+    // Determine which team is the market team to pass the right timeout counts
+    const marketTeamIsHome =
+      (gameState.homeTeamTricode === nbaTeam1 && marketTeamCode === codes.team1) ||
+      (gameState.homeTeamTricode === nbaTeam2 && marketTeamCode === codes.team2);
+    const marketTeamTimeouts = marketTeamIsHome
+      ? gameState.homeTimeoutsRemaining
+      : gameState.awayTimeoutsRemaining;
+    const opposingTimeouts = marketTeamIsHome
+      ? gameState.awayTimeoutsRemaining
+      : gameState.homeTimeoutsRemaining;
+
+    return this.winModel.calculate(scoreDiff, secondsLeft, marketTeamTimeouts, opposingTimeouts);
   }
 
   private parseMarket(m: KalshiMarket): BasketballMarket | null {

@@ -12,6 +12,8 @@ export interface NbaGameState {
   isQ4OrLater: boolean;
   homeTeamTricode: string;
   awayTeamTricode: string;
+  homeTimeoutsRemaining: number;
+  awayTimeoutsRemaining: number;
 }
 
 interface NbaScoreboardResponse {
@@ -29,8 +31,17 @@ interface NbaRawGame {
   awayTeam: { teamTricode: string; teamName: string; score: number };
 }
 
+interface NbaBoxscoreResponse {
+  game: {
+    homeTeam: { timeoutsRemaining?: number };
+    awayTeam: { timeoutsRemaining?: number };
+  };
+}
+
 const NBA_SCOREBOARD_URL =
   'https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json';
+const NBA_BOXSCORE_URL = (gameId: string) =>
+  `https://cdn.nba.com/static/json/liveData/boxscore/boxscore_${gameId}.json`;
 
 export class GameMonitor {
   private cache: NbaGameState[] = [];
@@ -52,7 +63,22 @@ export class GameMonitor {
         return this.cache;
       }
       const data = (await resp.json()) as NbaScoreboardResponse;
-      this.cache = data.scoreboard.games.map(this.parseGame);
+      const games = data.scoreboard.games.map(this.parseGame);
+
+      // Fetch timeouts for live games in parallel
+      await Promise.all(
+        games
+          .filter((g) => g.gameStatus === 2)
+          .map(async (g) => {
+            const timeouts = await this.fetchBoxscoreTimeouts(g.gameId);
+            if (timeouts) {
+              g.homeTimeoutsRemaining = timeouts.home;
+              g.awayTimeoutsRemaining = timeouts.away;
+            }
+          }),
+      );
+
+      this.cache = games;
       this.lastFetch = now;
     } catch (err) {
       console.warn('[GameMonitor] Failed to fetch NBA scoreboard:', err);
@@ -84,6 +110,24 @@ export class GameMonitor {
     return `${mins}:${secs}`;
   }
 
+  private async fetchBoxscoreTimeouts(
+    gameId: string,
+  ): Promise<{ home: number; away: number } | null> {
+    try {
+      const resp = await fetch(NBA_BOXSCORE_URL(gameId), {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; bballer/1.0)' },
+      });
+      if (!resp.ok) return null;
+      const data = (await resp.json()) as NbaBoxscoreResponse;
+      return {
+        home: data.game.homeTeam.timeoutsRemaining ?? 0,
+        away: data.game.awayTeam.timeoutsRemaining ?? 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private parseGame(g: NbaRawGame): NbaGameState {
     return {
       gameId: g.gameId,
@@ -97,6 +141,8 @@ export class GameMonitor {
       isQ4OrLater: g.gameStatus === 2 && g.period >= 4,
       homeTeamTricode: g.homeTeam.teamTricode,
       awayTeamTricode: g.awayTeam.teamTricode,
+      homeTimeoutsRemaining: 0,
+      awayTimeoutsRemaining: 0,
     };
   }
 }

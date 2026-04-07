@@ -11,20 +11,57 @@
 const SIGMA_PER_SQRT_SECOND = 0.22;
 const REGULATION_PERIOD_SECONDS = 12 * 60; // 12 minutes per quarter
 const OT_PERIOD_SECONDS = 5 * 60;           // 5 minutes per OT period
+const SECONDS_PER_TIMEOUT = 14;             // ~1 extra possession per timeout
+const TIMEOUT_WINDOW_SECONDS = 120;         // only adjust in final 2 minutes
 
 export class WinProbabilityModel {
   /**
    * Returns win probability for the team with the given score differential
    * (positive = leading) with secondsRemaining left in the game.
+   *
+   * Optional: pass timeout counts for each team to adjust effective seconds
+   * remaining in the final 2 minutes. Each timeout the trailing team holds
+   * over the leading team adds ~14 seconds (one possession) of effective time.
    */
-  calculate(scoreDiff: number, secondsRemaining: number): number {
-    if (secondsRemaining <= 0) {
+  calculate(
+    scoreDiff: number,
+    secondsRemaining: number,
+    marketTeamTimeouts?: number,
+    opposingTeamTimeouts?: number,
+  ): number {
+    const effectiveSeconds =
+      marketTeamTimeouts !== undefined && opposingTeamTimeouts !== undefined
+        ? this.adjustForTimeouts(scoreDiff, secondsRemaining, marketTeamTimeouts, opposingTeamTimeouts)
+        : secondsRemaining;
+
+    if (effectiveSeconds <= 0) {
       if (scoreDiff > 0) return 1.0;
       if (scoreDiff < 0) return 0.0;
       return 0.5; // tied, needs OT
     }
-    const z = scoreDiff / (SIGMA_PER_SQRT_SECOND * Math.sqrt(secondsRemaining));
+    const z = scoreDiff / (SIGMA_PER_SQRT_SECOND * Math.sqrt(effectiveSeconds));
     return this.normalCdf(z);
+  }
+
+  /**
+   * Adjust effective seconds based on timeout differential in the final 2 minutes.
+   * The trailing team's extra timeouts let them stop the clock and run more
+   * possessions — each timeout ≈ one extra possession ≈ 14 seconds.
+   */
+  private adjustForTimeouts(
+    scoreDiff: number,
+    secondsRemaining: number,
+    marketTeamTimeouts: number,
+    opposingTeamTimeouts: number,
+  ): number {
+    if (secondsRemaining > TIMEOUT_WINDOW_SECONDS) return secondsRemaining;
+
+    // Positive scoreDiff = market team is leading
+    const trailingTimeouts = scoreDiff >= 0 ? opposingTeamTimeouts : marketTeamTimeouts;
+    const leadingTimeouts  = scoreDiff >= 0 ? marketTeamTimeouts  : opposingTeamTimeouts;
+    const advantage = Math.max(0, trailingTimeouts - leadingTimeouts);
+
+    return secondsRemaining + advantage * SECONDS_PER_TIMEOUT;
   }
 
   /**
