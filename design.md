@@ -2,7 +2,7 @@
 
 ## Overview
 
-`bballer` is an autonomous TypeScript agent that trades professional basketball game-winner markets on Kalshi prediction markets. It runs a 30-second polling loop, identifies high-confidence live games in their fourth quarter, and enters/exits YES positions based on win probability thresholds.
+`bballer` is an autonomous TypeScript agent that trades professional basketball game-winner markets on Kalshi prediction markets. It runs a 1-second polling loop, identifies live NBA games in their fourth quarter, and enters/exits YES positions based on a blended win probability model.
 
 ---
 
@@ -11,19 +11,22 @@
 ```
 src/
   api/
-    KalshiClient.ts     — RSA-PSS authenticated HTTP client for Kalshi API
-    types.ts            — All Kalshi API request/response types
+    KalshiClient.ts        — RSA-PSS authenticated HTTP client for Kalshi API
+    types.ts               — All Kalshi API request/response types
   services/
-    MarketService.ts    — Discovers and parses basketball game-winner markets
-    OrderService.ts     — Places and cancels limit orders
-    PortfolioService.ts — Reads balance and open positions
+    MarketService.ts       — Discovers and parses basketball game-winner markets; computes blended win probability
+    GameMonitor.ts         — Polls NBA Live Data CDN for scores, clocks, and timeouts
+    WinProbabilityModel.ts — Gaussian random-walk win probability (Clauset 2015) with timeout adjustment
+    OrderService.ts        — Places and cancels limit orders
+    PortfolioService.ts    — Reads balance and open positions
   strategy/
-    TradingStrategy.ts  — Entry/exit signal logic; PnL calculation
+    TradingStrategy.ts     — Entry/exit signal logic with confirmation windows; Kelly position sizing
   storage/
-    TradeHistory.ts     — Persists trade records to trade_history.json
+    TradeHistory.ts        — Persists trade records to trade_history.json
+    AnalysisLogger.ts      — Writes per-tick JSON-lines analysis log (PST-dated)
   agent/
-    TradingAgent.ts     — Main polling loop; orchestrates all components
-  index.ts              — Entry point; wires up dependencies
+    TradingAgent.ts        — Main polling loop; orchestrates all components
+  index.ts                 — Entry point; wires dependencies; redirects stdout to PST-dated agent log
 ```
 
 ---
@@ -31,57 +34,91 @@ src/
 ## Key Design Decisions
 
 ### 1. RSA-PSS Authentication
-Kalshi's trade API requires RSA-PSS signatures on every authenticated request. The message is `{timestamp_ms}{METHOD}{/trade-api/v2/path}` (no query string in signed path). The `KALSHI_API_KEY` environment variable holds the key UUID; the RSA private key lives in `private_key.pem` (never committed).
+Kalshi's trade API requires RSA-PSS signatures on every authenticated request. The message is `{timestamp_ms}{METHOD}{/trade-api/v2/path}` (no query string in signed path). `KALSHI_API_KEY` holds the key UUID; the private key lives in `private_key.pem` (never committed).
 
 ### 2. Price Representation
-Kalshi prices are integers in the range 0-100 (cents). All internal price values are normalized to 0.0-1.0 floats immediately upon parsing to keep business logic clean.
+Kalshi prices are integers 0–100 (cents). All internal prices are normalized to 0.0–1.0 floats immediately on parsing.
 
-### 3. Win Probability Estimation
-Win probability is estimated as the mid-price of the YES side bid/ask spread: `(yes_bid + yes_ask) / 2`. This is the market's consensus probability and directionally accurate for the strategy thresholds (90% entry, 80% exit). More sophisticated estimation can incorporate order book depth or recent trade momentum.
+### 3. Win Probability — Blended Model
+Win probability combines a Gaussian random-walk model with the Kalshi market mid-price:
 
-### 4. Market Discovery
-Basketball game-winner markets are discovered by:
-1. Iterating known series tickers (`KXNBA`, `NBA`)
-2. Scanning open events for basketball keywords in title/series
+```
+winProbability = 0.7 × Gaussian(scoreDiff, secondsLeft, timeouts)
+              + 0.3 × (kalshiBid + kalshiAsk) / 2
+```
 
-Filtering logic rejects prop markets (points, rebounds, quarter results, etc.) and accepts only markets with "win"/"winner" in title/ticker/rules.
+The Gaussian model (Clauset 2015): `Φ(scoreDiff / (0.22 × √secondsLeft))` models each possession as a random step. In the final 2 minutes, the trailing team's extra timeouts add 14s of effective game time per timeout advantage (timeout adjustment).
 
-### 5. Trading Strategy
-- **Entry**: Only when `winProbability > 90%` and market is open
-- **Exit**: When `winProbability ≤ 80%` or market closes
-- **Position sizing**: Min of `MAX_CONTRACTS_PER_TRADE` (10) and what the balance can cover up to `MAX_COST_PER_TRADE` ($50)
-- **Budget guard**: Agent halts entirely if balance reaches zero
+The 70/30 blend was calibrated via backtest on 2026-04-06 game data: it exits losing positions ~2 minutes earlier than the pure model with no false exits on winning positions.
 
-### 6. Persistence
-Trades are persisted to `trade_history.json` (excluded from git). On restart the agent reloads history for PnL tracking and analysis.
+### 4. Entry Criteria
+1. Market must be `active` or `open`
+2. Game state available from NBA Live Data
+3. ≤ 300 seconds remaining (final 5 minutes only)
+4. YES ask > 89¢ for **3 consecutive ticks** (confirmation window)
+5. On the 3rd tick: ask must be **> 90¢** (entry threshold)
+6. Size: `25% × (cash + open position cost basis)`, capped at available cash
 
-### 7. Dependency Injection
-All services accept their dependencies through the constructor. This enables unit testing with mock clients without network calls, while the real API test suite uses the live Kalshi API to verify authentication and response shapes.
+### 5. Exit Criteria
+1. Market inactive/closed → sell immediately at bid
+2. bid ≤ 80¢ AND blended winProbability ≥ 85% → hold (probability guard blocks exit)
+3. bid ≤ 80¢ AND blended winProbability < 85% → require **3 consecutive ticks**, then sell at bid
+4. bid > 80¢ → hold
+
+### 6. Position Sizing — Kelly Fraction
+Size is `25% × totalFunds` where `totalFunds = cashBalance + openPositionCostBasis`, capped at available cash. This accounts for deployed capital when sizing new entries, preventing over-allocation when multiple positions are open simultaneously.
+
+### 7. Market Discovery
+Basketball game-winner markets are discovered via the `KXNBAGAME` series ticker. Each event ticker encodes date and team codes (e.g. `KXNBAGAME-26APR06HOUGSW`). Team codes are mapped from Kalshi 3-letter codes to NBA tricodes via a static lookup table.
+
+### 8. NBA Live Data
+Game state (score, clock, period, timeouts) is fetched from the NBA CDN every 5 seconds:
+- Scoreboard: `https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json`
+- Boxscore per game: `https://cdn.nba.com/static/json/liveData/boxscore/boxscore_{gameId}.json`
+
+Timeout counts are used to adjust effective seconds remaining in the final 2 minutes.
+
+### 9. Logging
+Two PST-dated log files are written per game day:
+
+| File | Format | Content |
+|------|--------|---------|
+| `agent_YYYY-MM-DD.log` | Plain text | All console output; PST date captured at process startup |
+| `analysis_YYYY-MM-DD.log` | JSON-lines | Per-tick structured data: games, markets, signals, decisions, open positions, summary |
+
+Both use **PST (America/Los_Angeles)** timezone for date grouping — one file per NBA game day. The analysis log rolls over at PST midnight each tick; the agent log uses the PST date at startup.
+
+### 10. Dependency Injection
+All services accept dependencies through the constructor for unit-testable components. The live API integration test suite makes real Kalshi API requests to verify authentication and response shapes.
 
 ---
 
 ## Trade Lifecycle
 
 ```
-scan markets → evaluate entry signal
-  ↓ (prob > 90%)
-place limit buy (YES) at ask price
+[every 1s]
+fetch NBA game states (cached 5s) + Kalshi markets
   ↓
-store TradeRecord (open)
+manage open positions:
+  market settled?    → record settlement at 1.0 or 0.0
+  market inactive?   → await settlement
+  bid ≤ 80¢ + prob < 85% for 3 ticks → sell at bid
   ↓
-every 30s: re-fetch market
-  ↓ (prob ≤ 80% OR closed)
-place limit sell (YES) at bid price
+scan Q4 markets for entries:
+  ask > 89¢ for 3 ticks, ask > 90¢, ≤ 5 min left → buy at ask
+  size = 25% × (cash + deployed), capped at cash
   ↓
-update TradeRecord with exit + PnL
+write analysis tick to analysis_YYYY-MM-DD.log
 ```
 
 ---
 
-## Future Improvements
+## Persistence
 
-- Incorporate Kalshi Live Data API (WebSocket) for intra-second price updates
-- Implement quarter detection (currently relies on market status; could parse event title)
-- Add confidence scoring based on order book depth
-- Adaptive position sizing based on probability strength
-- Strategy backtesting against completed game history
+| File | Purpose |
+|------|---------|
+| `trade_history.json` | All trade records with entry/exit prices, PnL, timestamps |
+| `analysis_YYYY-MM-DD.log` | Per-tick market snapshots for post-game analysis |
+| `agent_YYYY-MM-DD.log` | Full agent console output |
+
+`trade_history.json` and `*.log` files are excluded from git.
