@@ -94,6 +94,7 @@ export class TradingAgent {
 
         // Market settled — record outcome directly, no sell order needed
         if (market.result) {
+          this.strategy.clearExitConfirmation(record.ticker);
           this.recordSettlement(record, market);
           continue;
         }
