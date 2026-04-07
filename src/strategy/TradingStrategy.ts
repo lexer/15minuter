@@ -1,6 +1,7 @@
 import { BasketballMarket } from '../services/MarketService';
 
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
+export const ENTRY_MAX_PROBABILITY = 0.96;      // skip if ask >= 96¢ — insufficient upside
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;
 export const EXIT_PROBABILITY_GUARD = 0.85; // don't exit on bid dip if model prob is above this
 export const EXIT_CONFIRMATION_TICKS = 3;   // consecutive ticks below bid threshold required to exit
@@ -79,8 +80,8 @@ export class TradingStrategy {
       };
     }
 
-    if (market.yesAsk >= 1.0) {
-      return { action: 'hold', reason: 'Ask at $1.00 — no upside', market };
+    if (market.yesAsk >= ENTRY_MAX_PROBABILITY) {
+      return { action: 'hold', reason: `Ask ${(market.yesAsk * 100).toFixed(0)}¢ ≥ ${ENTRY_MAX_PROBABILITY * 100}¢ — insufficient upside`, market };
     }
 
     if (market.yesAsk <= 0) {

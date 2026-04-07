@@ -1,4 +1,4 @@
-import { TradingStrategy, ENTRY_PROBABILITY_THRESHOLD, EXIT_PROBABILITY_THRESHOLD, EXIT_PROBABILITY_GUARD, EXIT_CONFIRMATION_TICKS } from '../../src/strategy/TradingStrategy';
+import { TradingStrategy, ENTRY_PROBABILITY_THRESHOLD, ENTRY_MAX_PROBABILITY, EXIT_PROBABILITY_THRESHOLD, EXIT_PROBABILITY_GUARD, EXIT_CONFIRMATION_TICKS } from '../../src/strategy/TradingStrategy';
 import { BasketballMarket } from '../../src/services/MarketService';
 
 function makeMarket(overrides: Partial<BasketballMarket> = {}): BasketballMarket {
@@ -127,6 +127,18 @@ describe('TradingStrategy', () => {
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.suggestedContracts).toBe(263);
+    });
+
+    it('returns hold when ask is at or above ENTRY_MAX_PROBABILITY (96¢)', () => {
+      const market = makeMarket({ yesAsk: ENTRY_MAX_PROBABILITY });
+      const signal = strategy.evaluateEntry(market, 100_000);
+      expect(signal.action).toBe('hold');
+    });
+
+    it('returns hold when ask is above 96¢', () => {
+      const market = makeMarket({ yesAsk: 0.99 });
+      const signal = strategy.evaluateEntry(market, 100_000);
+      expect(signal.action).toBe('hold');
     });
   });
 
