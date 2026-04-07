@@ -4,9 +4,14 @@ import { NbaGameState } from '../services/GameMonitor';
 import { BasketballMarket } from '../services/MarketService';
 import { TradeSignal } from '../strategy/TradingStrategy';
 import { TradeRecord } from './TradeHistory';
+import { GameMonitor } from '../services/GameMonitor';
 
 function extractTeam(ticker: string): string {
   return ticker.match(/-([A-Z]{3})$/)?.[1] ?? ticker;
+}
+
+function r4(n: number): number {
+  return Math.round(n * 10_000) / 10_000;
 }
 
 export interface MarketSnapshot {
@@ -14,39 +19,29 @@ export interface MarketSnapshot {
   winProbability: number | null; // model probability (null pre-game — no score/time data)
   ask: number;
   bid: number;
+  // Present only for Q4 markets evaluated for entry
+  signal?: 'buy' | 'sell' | 'hold';
+  signalReason?: string;
+  contracts?: number;
+  limitPrice?: number;
 }
 
 export interface GameAnalysis {
   matchup: string;
   period: number;
-  clock: string;
+  clock: string;          // formatted "mm:ss"
   score: string;
   isQ4: boolean;
-  status: 'live' | 'upcoming' | 'final';
-  markets: MarketSnapshot[];     // Kalshi markets for this game's teams
+  markets: MarketSnapshot[];
 }
 
 export interface TickAnalysis {
   timestamp: string;
   balanceDollars: number;
-  games: GameAnalysis[];         // live/upcoming games with embedded market data
-  q4Markets: MarketAnalysis[];   // Q4 markets with trading signals
+  games: GameAnalysis[];
   decisions: DecisionLog[];
   openPositions: PositionAnalysis[];
   summary: { totalTrades: number; totalPnl: number; winRate: number };
-}
-
-export interface MarketAnalysis {
-  ticker: string;
-  team: string;            // e.g. "HOU" — both winProbability and kalshiAskProb refer to this team winning
-  title: string;
-  winProbability: number;  // model probability (Gaussian random walk on score/time)
-  kalshiAskProb: number;   // Kalshi ask price = market-implied win probability for this team
-  bid: number;
-  signal: 'buy' | 'sell' | 'hold' | 'skip';
-  signalReason: string;
-  contracts?: number;
-  limitPrice?: number;
 }
 
 export interface DecisionLog {
@@ -61,18 +56,17 @@ export interface DecisionLog {
 
 export interface PositionAnalysis {
   ticker: string;
-  team: string;              // e.g. "HOU"
+  team: string;
   contracts: number;
   entryPrice: number;
   entryProb: number;
   entryTime: string;
-  currentProb?: number;      // model probability
-  kalshiAskProb?: number;    // Kalshi ask = market-implied win probability for this team
+  currentProb?: number;
+  kalshiAskProb?: number;
   unrealizedPnl?: number;
 }
 
 function pstDateString(): string {
-  // Games are in the US — use America/Los_Angeles so one log file = one NBA game day
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 }
 
@@ -88,7 +82,6 @@ export class AnalysisLogger {
       timestamp: new Date().toISOString(),
       balanceDollars: balanceCents / 100,
       games: [],
-      q4Markets: [],
       decisions: [],
       openPositions: [],
     };
@@ -96,12 +89,9 @@ export class AnalysisLogger {
 
   /**
    * Join NBA game states with Kalshi market data into unified game entries.
-   * Pre-game Kalshi markets with no live NBA match are included as upcoming entries.
    */
   logGames(games: NbaGameState[], markets: BasketballMarket[]): void {
-    // Group markets by their live game (matched by team codes via gameState)
     const marketsByGameKey = new Map<string, BasketballMarket[]>();
-    const pregameMarkets: BasketballMarket[] = [];
 
     for (const m of markets) {
       if (m.gameState) {
@@ -109,13 +99,10 @@ export class AnalysisLogger {
         const arr = marketsByGameKey.get(key) ?? [];
         arr.push(m);
         marketsByGameKey.set(key, arr);
-      } else {
-        pregameMarkets.push(m);
       }
     }
 
-    // Only log games that are currently live
-    const entries: GameAnalysis[] = games
+    this.pendingTick.games = games
       .filter((g) => g.gameStatus !== 1 && g.gameStatus !== 3)
       .map((g) => {
         const key = `${g.awayTeamTricode}@${g.homeTeamTricode}`;
@@ -123,36 +110,37 @@ export class AnalysisLogger {
         return {
           matchup: key,
           period: g.period,
-          clock: g.gameClock,
+          clock: GameMonitor.formatClock(g.gameClock),
           score: `${g.awayScore}-${g.homeScore}`,
           isQ4: g.isQ4OrLater,
-          status: 'live' as const,
           markets: gameMarkets.map((m) => ({
             team: extractTeam(m.ticker),
-            winProbability: g.period > 0 ? m.winProbability : null,
+            winProbability: g.period > 0 ? r4(m.winProbability) : null,
             ask: m.yesAsk,
             bid: m.yesBid,
           })),
         };
       });
-
-    this.pendingTick.games = entries;
   }
 
+  /**
+   * Attach signal data to the existing market snapshot inside games[].
+   * Avoids duplicating winProbability/ask/bid already logged in the game entry.
+   */
   logMarketEval(market: BasketballMarket, signal: TradeSignal): void {
-    this.pendingTick.q4Markets = this.pendingTick.q4Markets ?? [];
-    this.pendingTick.q4Markets.push({
-      ticker: market.ticker,
-      team: extractTeam(market.ticker),
-      title: market.title,
-      winProbability: market.winProbability,
-      kalshiAskProb: market.yesAsk,
-      bid: market.yesBid,
-      signal: signal.action === 'buy' ? 'buy' : signal.action === 'sell' ? 'sell' : 'hold',
-      signalReason: signal.reason,
-      contracts: signal.suggestedContracts,
-      limitPrice: signal.suggestedLimitPrice,
-    });
+    const team = extractTeam(market.ticker);
+    for (const game of this.pendingTick.games ?? []) {
+      const snapshot = game.markets.find((m) => m.team === team);
+      if (snapshot) {
+        snapshot.signal = signal.action === 'buy' ? 'buy'
+          : signal.action === 'sell' ? 'sell'
+          : 'hold';
+        snapshot.signalReason = signal.reason;
+        if (signal.suggestedContracts !== undefined) snapshot.contracts = signal.suggestedContracts;
+        if (signal.suggestedLimitPrice !== undefined) snapshot.limitPrice = signal.suggestedLimitPrice;
+        return;
+      }
+    }
   }
 
   logDecision(decision: DecisionLog): void {
@@ -163,17 +151,17 @@ export class AnalysisLogger {
   logOpenPositions(trades: TradeRecord[], markets: Map<string, BasketballMarket>): void {
     this.pendingTick.openPositions = trades.map((t) => {
       const market = markets.get(t.ticker);
-      const currentProb = market?.winProbability;
+      const currentProb = market?.winProbability !== undefined ? r4(market.winProbability) : undefined;
       const kalshiAskProb = market?.yesAsk;
       const unrealizedPnl = currentProb !== undefined
-        ? (currentProb - t.pricePerContract) * t.contracts
+        ? Math.round((currentProb - t.pricePerContract) * t.contracts * 100) / 100
         : undefined;
       return {
         ticker: t.ticker,
         team: extractTeam(t.ticker),
         contracts: t.contracts,
         entryPrice: t.pricePerContract,
-        entryProb: t.winProbabilityAtEntry,
+        entryProb: r4(t.winProbabilityAtEntry),
         entryTime: t.entryTime,
         currentProb,
         kalshiAskProb,
@@ -187,10 +175,13 @@ export class AnalysisLogger {
       timestamp: this.pendingTick.timestamp ?? new Date().toISOString(),
       balanceDollars: this.pendingTick.balanceDollars ?? 0,
       games: this.pendingTick.games ?? [],
-      q4Markets: this.pendingTick.q4Markets ?? [],
       decisions: this.pendingTick.decisions ?? [],
       openPositions: this.pendingTick.openPositions ?? [],
-      summary,
+      summary: {
+        totalTrades: summary.totalTrades,
+        totalPnl: Math.round(summary.totalPnl * 100) / 100,
+        winRate: r4(summary.winRate),
+      },
     };
     fs.appendFileSync(dailyLogPath('analysis'), JSON.stringify(tick) + '\n', 'utf-8');
     this.pendingTick = {};
