@@ -79,8 +79,8 @@ export class TradingAgent {
   private async manageOpenPositions(): Promise<void> {
     const openTrades = this.history.getOpenTrades();
 
-    // Track current probabilities for unrealized PnL analysis
-    const marketProbs = new Map<string, number>();
+    // Track current market state for analysis logging
+    const openMarkets = new Map<string, BasketballMarket>();
 
     if (openTrades.length > 0) {
       console.log(`[Agent] Managing ${openTrades.length} open position(s)...`);
@@ -89,7 +89,7 @@ export class TradingAgent {
     for (const record of openTrades) {
       try {
         const market = await this.markets.getMarket(record.ticker);
-        marketProbs.set(record.ticker, market.winProbability);
+        openMarkets.set(record.ticker, market);
 
         // Market settled — record outcome directly, no sell order needed
         if (market.result) {
@@ -129,7 +129,7 @@ export class TradingAgent {
       }
     }
 
-    this.analysis.logOpenPositions(openTrades, marketProbs);
+    this.analysis.logOpenPositions(openTrades, openMarkets);
   }
 
   private async scanForEntries(balanceCents: number): Promise<void> {
