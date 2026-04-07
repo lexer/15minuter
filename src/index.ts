@@ -4,6 +4,32 @@ import * as path from 'path';
 
 dotenv.config();
 
+// ── Single-instance lock via PID file ────────────────────────────────────────
+const PID_FILE = path.resolve(process.cwd(), 'agent.pid');
+
+function acquireLock(): void {
+  if (fs.existsSync(PID_FILE)) {
+    const existingPid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
+    if (!isNaN(existingPid)) {
+      try {
+        process.kill(existingPid, 0); // throws if process does not exist
+        console.error(`[Main] Agent already running (PID ${existingPid}). Exiting.`);
+        process.exit(1);
+      } catch {
+        // Stale PID file — previous process is gone, safe to overwrite
+      }
+    }
+  }
+  fs.writeFileSync(PID_FILE, String(process.pid), 'utf-8');
+}
+
+function releaseLock(): void {
+  try { fs.unlinkSync(PID_FILE); } catch { /* already gone */ }
+}
+
+acquireLock();
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Redirect stdout to a PST-dated agent log; stderr to a dedicated errors.log
 const pstDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 const logPath = path.resolve(process.cwd(), `agent_${pstDate}.log`);
@@ -26,7 +52,12 @@ function closeStreams(): void {
   errorStream.end();
 }
 
-process.on('exit', closeStreams);
+function cleanup(): void {
+  releaseLock();
+  closeStreams();
+}
+
+process.on('exit', cleanup);
 
 import { KalshiClient } from './api/KalshiClient';
 import { MarketService } from './services/MarketService';
@@ -65,7 +96,7 @@ function main(): void {
   const shutdown = (signal: string) => {
     console.log(`\n[Main] Received ${signal} — shutting down...`);
     agent.stop();
-    closeStreams();
+    cleanup();
     process.exit(0);
   };
 
@@ -74,7 +105,7 @@ function main(): void {
 
   agent.start().catch((err) => {
     console.error('[Main] Fatal error:', err);
-    closeStreams();
+    cleanup();
     process.exit(1);
   });
 }
