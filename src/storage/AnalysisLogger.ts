@@ -13,8 +13,8 @@ export interface LiveMarketSnapshot {
   ticker: string;
   team: string;
   period: number;
-  winProbability: number; // model probability
-  kalshiAskProb: number;  // Kalshi ask = market-implied win probability
+  winProbability: number | null; // model probability (null when game not live — no score/time data)
+  kalshiAskProb: number;         // Kalshi ask = market-implied win probability
   bid: number;
   isQ4: boolean;
 }
@@ -103,7 +103,8 @@ export class AnalysisLogger {
       ticker: m.ticker,
       team: extractTeam(m.ticker),
       period: m.gameState?.period ?? 0,
-      winProbability: m.winProbability,
+      // Only log model probability when game is live — pre-game has no score/clock
+      winProbability: m.gameState && m.gameState.period > 0 ? m.winProbability : null,
       kalshiAskProb: m.yesAsk,
       bid: m.yesBid,
       isQ4: m.isQ4,
