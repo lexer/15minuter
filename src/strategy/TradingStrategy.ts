@@ -2,7 +2,6 @@ import { BasketballMarket } from '../services/MarketService';
 import { WinProbabilityModel } from '../services/WinProbabilityModel';
 
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
-export const ENTRY_MAX_PROBABILITY = 0.96;          // skip if ask >= 96¢ — insufficient upside
 export const ENTRY_CONFIRMATION_THRESHOLD = 0.89;   // ask must exceed this for consecutive-tick confirmation
 export const ENTRY_CONFIRMATION_TICKS = 3;          // consecutive ticks above threshold required before entry
 export const ENTRY_MAX_SECONDS = 300;               // only enter in final 5 minutes of game
@@ -128,10 +127,6 @@ export class TradingStrategy {
         reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ at or below entry threshold ${ENTRY_PROBABILITY_THRESHOLD * 100}¢`,
         market,
       };
-    }
-
-    if (market.yesAsk >= ENTRY_MAX_PROBABILITY) {
-      return { action: 'hold', reason: `Ask ${(market.yesAsk * 100).toFixed(0)}¢ ≥ ${ENTRY_MAX_PROBABILITY * 100}¢ — insufficient upside`, market };
     }
 
     // Size at 25% of total portfolio (cash + open positions), capped at available cash

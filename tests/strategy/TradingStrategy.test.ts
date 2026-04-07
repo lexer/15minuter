@@ -1,7 +1,6 @@
 import {
   TradingStrategy,
   ENTRY_PROBABILITY_THRESHOLD,
-  ENTRY_MAX_PROBABILITY,
   ENTRY_CONFIRMATION_TICKS,
   ENTRY_CONFIRMATION_THRESHOLD,
   ENTRY_MAX_SECONDS,
@@ -192,18 +191,6 @@ describe('TradingStrategy', () => {
     it('holds when balance is too small for 1 contract', () => {
       const market = makeMarket({ yesAsk: 0.94 });
       const signal = confirmEntry(strategy, market, 50);
-      expect(signal.action).toBe('hold');
-    });
-
-    it('returns hold when ask is at or above ENTRY_MAX_PROBABILITY (96¢)', () => {
-      const market = makeMarket({ yesAsk: ENTRY_MAX_PROBABILITY });
-      const signal = confirmEntry(strategy, market, 100_000);
-      expect(signal.action).toBe('hold');
-    });
-
-    it('returns hold when ask is above 96¢', () => {
-      const market = makeMarket({ yesAsk: 0.99 });
-      const signal = confirmEntry(strategy, market, 100_000);
       expect(signal.action).toBe('hold');
     });
 
