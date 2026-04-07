@@ -42,12 +42,10 @@ export class TradingAgent {
       return;
     }
 
-    // Fetch all live markets once — used for logging and entry scanning
+    // Fetch games and markets together — logged as unified entries
     const allGames = await this.gameMonitor.getLiveGames();
-    this.analysis.logGames(allGames);
-
     const allMarkets = await this.markets.getAllLiveBasketballMarkets();
-    this.analysis.logAllMarkets(allMarkets);
+    this.analysis.logGames(allGames, allMarkets);
 
     await this.manageOpenPositions();
     await this.scanForEntries(balanceCents, allMarkets.filter((m) => m.isQ4));
