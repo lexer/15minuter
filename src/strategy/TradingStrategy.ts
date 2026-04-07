@@ -1,17 +1,20 @@
 import { BasketballMarket } from '../services/MarketService';
+import { WinProbabilityModel } from '../services/WinProbabilityModel';
 
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
-export const ENTRY_MAX_PROBABILITY = 0.96;      // skip if ask >= 96¢ — insufficient upside
+export const ENTRY_MAX_PROBABILITY = 0.96;          // skip if ask >= 96¢ — insufficient upside
+export const ENTRY_CONFIRMATION_THRESHOLD = 0.89;   // ask must exceed this for consecutive-tick confirmation
+export const ENTRY_CONFIRMATION_TICKS = 3;          // consecutive ticks above threshold required before entry
+export const ENTRY_MAX_SECONDS = 300;               // only enter in final 5 minutes of game
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;
 export const EXIT_PROBABILITY_GUARD = 0.85; // don't exit on bid dip if model prob is above this
 export const EXIT_CONFIRMATION_TICKS = 3;   // consecutive ticks below bid threshold required to exit
-export const MAX_CONTRACTS_PER_TRADE = 50;
 
-// Quarter-Kelly: risk this fraction of balance per trade, scaled by edge
-const KELLY_FRACTION = 0.25;
-
-// Risk at least 25% of current balance on a single trade
+// Risk 25% of current balance on a single trade
 const MAX_BALANCE_RISK_FRACTION = 0.25;
+
+// Quarter-Kelly: used for informational sizing only
+const KELLY_FRACTION = 0.25;
 
 export interface TradeSignal {
   action: 'buy' | 'sell' | 'hold';
@@ -22,10 +25,15 @@ export interface TradeSignal {
 }
 
 export class TradingStrategy {
-  private readonly lowBidCounts = new Map<string, number>();
+  private readonly highAskCounts = new Map<string, number>(); // entry confirmation
+  private readonly lowBidCounts = new Map<string, number>();  // exit confirmation
 
   private isTradeable(status: string): boolean {
     return status === 'open' || status === 'active';
+  }
+
+  clearEntryConfirmation(ticker: string): void {
+    this.highAskCounts.delete(ticker);
   }
 
   clearExitConfirmation(ticker: string): void {
@@ -54,15 +62,10 @@ export class TradingStrategy {
       return { contracts: 0, reason: `No edge (ask $${askPrice.toFixed(2)} ≥ prob ${(prob * 100).toFixed(1)}%)` };
     }
 
-    // Cap at MAX_BALANCE_RISK_FRACTION regardless of Kelly
     const riskFraction = Math.min(kelly, MAX_BALANCE_RISK_FRACTION);
     const maxSpendCents = Math.floor(availableBalanceCents * riskFraction);
     const costPerContractCents = Math.round(askPrice * 100);
-
-    const contracts = Math.min(
-      MAX_CONTRACTS_PER_TRADE,
-      Math.floor(maxSpendCents / costPerContractCents),
-    );
+    const contracts = Math.floor(maxSpendCents / costPerContractCents);
 
     return { contracts };
   }
@@ -73,9 +76,52 @@ export class TradingStrategy {
     openPositionsCostCents: number = 0,
   ): TradeSignal {
     if (!this.isTradeable(market.status)) {
+      this.highAskCounts.delete(market.ticker);
       return { action: 'hold', reason: `Market not tradeable (status=${market.status})`, market };
     }
 
+    // Require game state to verify time remaining
+    if (!market.gameState) {
+      this.highAskCounts.delete(market.ticker);
+      return { action: 'hold', reason: 'No game state — cannot verify time remaining', market };
+    }
+
+    // Only enter in the final 5 minutes
+    const secondsLeft = WinProbabilityModel.secondsRemaining(
+      market.gameState.period,
+      market.gameState.gameClock,
+    );
+    if (secondsLeft > ENTRY_MAX_SECONDS) {
+      this.highAskCounts.delete(market.ticker);
+      return {
+        action: 'hold',
+        reason: `${(secondsLeft / 60).toFixed(1)} min remaining — entry only in final ${ENTRY_MAX_SECONDS / 60} min`,
+        market,
+      };
+    }
+
+    // Ask must exceed confirmation threshold for N consecutive ticks
+    if (market.yesAsk <= ENTRY_CONFIRMATION_THRESHOLD) {
+      this.highAskCounts.delete(market.ticker);
+      return {
+        action: 'hold',
+        reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ at or below confirmation threshold ${ENTRY_CONFIRMATION_THRESHOLD * 100}¢`,
+        market,
+      };
+    }
+
+    const count = (this.highAskCounts.get(market.ticker) ?? 0) + 1;
+    this.highAskCounts.set(market.ticker, count);
+
+    if (count < ENTRY_CONFIRMATION_TICKS) {
+      return {
+        action: 'hold',
+        reason: `Ask ${(market.yesAsk * 100).toFixed(0)}¢ above threshold — confirming entry (${count}/${ENTRY_CONFIRMATION_TICKS})`,
+        market,
+      };
+    }
+
+    // Entry range check
     if (market.yesAsk <= ENTRY_PROBABILITY_THRESHOLD) {
       return {
         action: 'hold',
@@ -86,10 +132,6 @@ export class TradingStrategy {
 
     if (market.yesAsk >= ENTRY_MAX_PROBABILITY) {
       return { action: 'hold', reason: `Ask ${(market.yesAsk * 100).toFixed(0)}¢ ≥ ${ENTRY_MAX_PROBABILITY * 100}¢ — insufficient upside`, market };
-    }
-
-    if (market.yesAsk <= 0) {
-      return { action: 'hold', reason: 'Invalid ask price', market };
     }
 
     // Size at 25% of total portfolio (cash + open positions), capped at available cash
@@ -110,7 +152,7 @@ export class TradingStrategy {
 
     return {
       action: 'buy',
-      reason: `ask=${(market.yesAsk * 100).toFixed(0)}¢ > ${ENTRY_PROBABILITY_THRESHOLD * 100}¢ | risking $${spendDollars} (${balancePct}% of balance)`,
+      reason: `ask=${(market.yesAsk * 100).toFixed(0)}¢ confirmed ${ENTRY_CONFIRMATION_TICKS} ticks | risking $${spendDollars} (${balancePct}% of balance)`,
       market,
       suggestedContracts: contracts,
       suggestedLimitPrice: market.yesAsk,

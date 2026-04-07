@@ -153,6 +153,7 @@ export class TradingAgent {
         console.log(
           `[Agent] ENTRY ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}% | ${signal.suggestedContracts} contracts @ $${signal.suggestedLimitPrice?.toFixed(2)}`,
         );
+        this.strategy.clearEntryConfirmation(market.ticker);
         const orderId = await this.executeEntry(market, signal.suggestedContracts!, signal.suggestedLimitPrice!);
         this.analysis.logDecision({
           type: 'entry',
