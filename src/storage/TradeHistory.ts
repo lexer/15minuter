@@ -65,7 +65,9 @@ export class TradeHistory {
   }
 
   private save(): void {
-    fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
+    const tmp = `${this.filePath}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf-8');
+    fs.renameSync(tmp, this.filePath);
   }
 
   recordTrade(trade: TradeRecord): void {
