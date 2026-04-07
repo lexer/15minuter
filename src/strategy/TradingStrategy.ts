@@ -2,7 +2,7 @@ import { BasketballMarket } from '../services/MarketService';
 import { WinProbabilityModel } from '../services/WinProbabilityModel';
 
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
-export const ENTRY_CONFIRMATION_THRESHOLD = 0.89;   // ask must exceed this for consecutive-tick confirmation
+export const ENTRY_CONFIRMATION_THRESHOLD = 0.9;    // ask must exceed this for consecutive-tick confirmation (same as entry threshold)
 export const ENTRY_CONFIRMATION_TICKS = 3;          // consecutive ticks above threshold required before entry
 export const ENTRY_MAX_SECONDS = 300;               // only enter in final 5 minutes of game
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;
