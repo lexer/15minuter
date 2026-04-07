@@ -42,12 +42,15 @@ export class TradingAgent {
       return;
     }
 
-    // Log all live game states for analysis
+    // Fetch all live markets once — used for logging and entry scanning
     const allGames = await this.gameMonitor.getLiveGames();
     this.analysis.logGames(allGames);
 
+    const allMarkets = await this.markets.getAllLiveBasketballMarkets();
+    this.analysis.logAllMarkets(allMarkets);
+
     await this.manageOpenPositions();
-    await this.scanForEntries(balanceCents);
+    await this.scanForEntries(balanceCents, allMarkets.filter((m) => m.isQ4));
 
     const summary = this.history.getSummary();
     this.logSummary(summary);
@@ -132,8 +135,7 @@ export class TradingAgent {
     this.analysis.logOpenPositions(openTrades, openMarkets);
   }
 
-  private async scanForEntries(balanceCents: number): Promise<void> {
-    const liveMarkets = await this.markets.getLiveBasketballMarkets();
+  private async scanForEntries(balanceCents: number, liveMarkets: BasketballMarket[]): Promise<void> {
     const openTickers = new Set(this.history.getOpenTrades().map((t) => t.ticker));
 
     console.log(`[Agent] ${liveMarkets.length} Q4 market(s) found`);

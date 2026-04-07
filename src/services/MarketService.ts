@@ -17,6 +17,7 @@ export interface BasketballMarket {
   volume: number;
   closeTime: Date;
   winProbability: number;
+  isQ4: boolean;
   gameState?: NbaGameState;
 }
 
@@ -38,7 +39,8 @@ export class MarketService {
     private readonly gameMonitor: GameMonitor,
   ) {}
 
-  async getLiveBasketballMarkets(): Promise<BasketballMarket[]> {
+  /** Returns all live KXNBAGAME markets regardless of quarter, with isQ4 flag set. */
+  async getAllLiveBasketballMarkets(): Promise<BasketballMarket[]> {
     const response = await this.client.getMarkets({
       series_ticker: 'KXNBAGAME',
       status: 'open',
@@ -48,11 +50,9 @@ export class MarketService {
     const markets: BasketballMarket[] = [];
 
     for (const m of response.markets) {
-
       const parsed = this.parseMarket(m);
       if (!parsed) continue;
 
-      // Attach live game state for Q4 detection and win probability model
       const codes = this.extractTeamCodes(m.event_ticker ?? '');
       if (codes) {
         const gameState = await this.gameMonitor.getGameState(
@@ -63,16 +63,19 @@ export class MarketService {
         if (gameState) {
           const teamCode = this.extractMarketTeamCode(m.ticker);
           parsed.winProbability = this.modelWinProbability(gameState, codes, teamCode) ?? parsed.winProbability;
+          parsed.isQ4 = gameState.isQ4OrLater;
         }
       }
 
-      // Only include markets where game is in Q4 or later
-      if (parsed.gameState?.isQ4OrLater) {
-        markets.push(parsed);
-      }
+      markets.push(parsed);
     }
 
     return markets;
+  }
+
+  /** Returns only markets where the game is in Q4 or later. */
+  async getLiveBasketballMarkets(): Promise<BasketballMarket[]> {
+    return (await this.getAllLiveBasketballMarkets()).filter((m) => m.isQ4);
   }
 
   async getMarket(ticker: string): Promise<BasketballMarket> {
@@ -176,6 +179,7 @@ export class MarketService {
       volume: m.volume_fp ? parseFloat(m.volume_fp) : (m.volume ?? 0),
       closeTime: new Date(m.close_time),
       winProbability,
+      isQ4: false, // set later once game state is attached
     };
   }
 

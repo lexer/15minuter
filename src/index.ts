@@ -1,7 +1,15 @@
 import * as dotenv from 'dotenv';
+import * as fs from 'fs';
 import * as path from 'path';
 
 dotenv.config();
+
+// Redirect stdout/stderr to a PST-dated log file so one file = one NBA game day
+const pstDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+const logPath = path.resolve(process.cwd(), `agent_${pstDate}.log`);
+const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+process.stdout.write = logStream.write.bind(logStream);
+process.stderr.write = logStream.write.bind(logStream);
 
 import { KalshiClient } from './api/KalshiClient';
 import { MarketService } from './services/MarketService';

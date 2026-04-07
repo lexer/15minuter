@@ -15,6 +15,7 @@ function makeMarket(overrides: Partial<BasketballMarket> = {}): BasketballMarket
     volume: 1000,
     closeTime: new Date(Date.now() + 3_600_000),
     winProbability: 0.93,
+    isQ4: true,
     ...overrides,
   };
 }

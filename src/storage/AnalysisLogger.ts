@@ -9,11 +9,22 @@ function extractTeam(ticker: string): string {
   return ticker.match(/-([A-Z]{3})$/)?.[1] ?? ticker;
 }
 
+export interface LiveMarketSnapshot {
+  ticker: string;
+  team: string;
+  period: number;
+  winProbability: number; // model probability
+  kalshiAskProb: number;  // Kalshi ask = market-implied win probability
+  bid: number;
+  isQ4: boolean;
+}
+
 export interface TickAnalysis {
   timestamp: string;
   balanceDollars: number;
   games: GameAnalysis[];
-  q4Markets: MarketAnalysis[];
+  allMarkets: LiveMarketSnapshot[]; // all live Kalshi markets regardless of quarter
+  q4Markets: MarketAnalysis[];      // Q4 markets with trading signals
   decisions: DecisionLog[];
   openPositions: PositionAnalysis[];
   summary: { totalTrades: number; totalPnl: number; winRate: number };
@@ -63,10 +74,13 @@ export interface PositionAnalysis {
   unrealizedPnl?: number;
 }
 
+function pstDateString(): string {
+  // Games are in the US — use America/Los_Angeles so one log file = one NBA game day
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+}
+
 function dailyLogPath(prefix: string): string {
-  const d = new Date();
-  const date = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-  return path.resolve(process.cwd(), `${prefix}_${date}.log`);
+  return path.resolve(process.cwd(), `${prefix}_${pstDateString()}.log`);
 }
 
 export class AnalysisLogger {
@@ -77,10 +91,23 @@ export class AnalysisLogger {
       timestamp: new Date().toISOString(),
       balanceDollars: balanceCents / 100,
       games: [],
+      allMarkets: [],
       q4Markets: [],
       decisions: [],
       openPositions: [],
     };
+  }
+
+  logAllMarkets(markets: BasketballMarket[]): void {
+    this.pendingTick.allMarkets = markets.map((m) => ({
+      ticker: m.ticker,
+      team: extractTeam(m.ticker),
+      period: m.gameState?.period ?? 0,
+      winProbability: m.winProbability,
+      kalshiAskProb: m.yesAsk,
+      bid: m.yesBid,
+      isQ4: m.isQ4,
+    }));
   }
 
   logGames(games: NbaGameState[]): void {
@@ -142,6 +169,7 @@ export class AnalysisLogger {
       timestamp: this.pendingTick.timestamp ?? new Date().toISOString(),
       balanceDollars: this.pendingTick.balanceDollars ?? 0,
       games: this.pendingTick.games ?? [],
+      allMarkets: this.pendingTick.allMarkets ?? [],
       q4Markets: this.pendingTick.q4Markets ?? [],
       decisions: this.pendingTick.decisions ?? [],
       openPositions: this.pendingTick.openPositions ?? [],
