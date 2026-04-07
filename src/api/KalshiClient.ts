@@ -16,6 +16,13 @@ import {
 const BASE_URL = 'https://api.elections.kalshi.com/trade-api/v2';
 const API_PATH_PREFIX = '/trade-api/v2';
 
+const RETRY_ATTEMPTS = 3;
+const RETRY_BASE_MS = 500; // doubles each attempt: 500ms, 1000ms, 2000ms
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class KalshiClient {
   private readonly keyId: string;
   private readonly privateKey: crypto.KeyObject;
@@ -41,34 +48,47 @@ export class KalshiClient {
     endpoint: string,
     body?: unknown,
   ): Promise<T> {
-    const timestamp = Date.now();
-    // Kalshi requires signing the full path including version prefix, without query string
-    const endpointPath = endpoint.split('?')[0];
-    const signature = this.sign(timestamp, method, `${API_PATH_PREFIX}${endpointPath}`);
+    let lastError: Error = new Error('No attempts made');
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'KALSHI-ACCESS-KEY': this.keyId,
-      'KALSHI-ACCESS-SIGNATURE': signature,
-      'KALSHI-ACCESS-TIMESTAMP': timestamp.toString(),
-    };
+    for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
+      if (attempt > 0) {
+        await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
+      }
 
-    const options: RequestInit = {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    };
+      const timestamp = Date.now();
+      // Kalshi requires signing the full path including version prefix, without query string
+      const endpointPath = endpoint.split('?')[0];
+      const signature = this.sign(timestamp, method, `${API_PATH_PREFIX}${endpointPath}`);
 
-    const response = await fetch(`${BASE_URL}${endpoint}`, options);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'KALSHI-ACCESS-KEY': this.keyId,
+        'KALSHI-ACCESS-SIGNATURE': signature,
+        'KALSHI-ACCESS-TIMESTAMP': timestamp.toString(),
+      };
 
-    if (!response.ok) {
+      const options: RequestInit = {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      };
+
+      const response = await fetch(`${BASE_URL}${endpoint}`, options);
+
+      if (response.ok) {
+        return response.json() as Promise<T>;
+      }
+
       const text = await response.text();
-      throw new Error(
-        `Kalshi API error ${response.status} on ${method} ${endpoint}: ${text}`,
-      );
+      lastError = new Error(`Kalshi API error ${response.status} on ${method} ${endpoint}: ${text}`);
+
+      // Don't retry client errors except 429 (rate limit)
+      if (response.status !== 429 && response.status < 500) {
+        throw lastError;
+      }
     }
 
-    return response.json() as Promise<T>;
+    throw lastError;
   }
 
   async getBalance(): Promise<KalshiBalance> {
