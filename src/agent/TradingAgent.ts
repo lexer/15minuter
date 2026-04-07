@@ -135,14 +135,18 @@ export class TradingAgent {
   }
 
   private async scanForEntries(balanceCents: number, liveMarkets: BasketballMarket[]): Promise<void> {
-    const openTickers = new Set(this.history.getOpenTrades().map((t) => t.ticker));
+    const openTrades = this.history.getOpenTrades();
+    const openTickers = new Set(openTrades.map((t) => t.ticker));
+    const openPositionsCostCents = Math.round(
+      openTrades.reduce((sum, t) => sum + t.totalCost, 0) * 100,
+    );
 
-    console.log(`[Agent] ${liveMarkets.length} Q4 market(s) found`);
+    console.log(`[Agent] ${liveMarkets.length} Q4 market(s) found | deployed=$${(openPositionsCostCents / 100).toFixed(2)}`);
 
     for (const market of liveMarkets) {
       if (openTickers.has(market.ticker)) continue;
 
-      const signal = this.strategy.evaluateEntry(market, balanceCents);
+      const signal = this.strategy.evaluateEntry(market, balanceCents, openPositionsCostCents);
       this.analysis.logMarketEval(market, signal);
 
       if (signal.action === 'buy') {

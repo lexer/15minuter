@@ -67,7 +67,11 @@ export class TradingStrategy {
     return { contracts };
   }
 
-  evaluateEntry(market: BasketballMarket, availableBalanceCents: number): TradeSignal {
+  evaluateEntry(
+    market: BasketballMarket,
+    availableBalanceCents: number,
+    openPositionsCostCents: number = 0,
+  ): TradeSignal {
     if (!this.isTradeable(market.status)) {
       return { action: 'hold', reason: `Market not tradeable (status=${market.status})`, market };
     }
@@ -88,8 +92,12 @@ export class TradingStrategy {
       return { action: 'hold', reason: 'Invalid ask price', market };
     }
 
-    // Size at 25% of balance — no contract count cap, balance fraction governs
-    const maxSpendCents = Math.floor(availableBalanceCents * MAX_BALANCE_RISK_FRACTION);
+    // Size at 25% of total portfolio (cash + open positions), capped at available cash
+    const totalFundsCents = availableBalanceCents + openPositionsCostCents;
+    const maxSpendCents = Math.min(
+      Math.floor(totalFundsCents * MAX_BALANCE_RISK_FRACTION),
+      availableBalanceCents,
+    );
     const costPerContractCents = Math.round(market.yesAsk * 100);
     const contracts = Math.floor(maxSpendCents / costPerContractCents);
 

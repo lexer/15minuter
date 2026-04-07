@@ -140,6 +140,26 @@ describe('TradingStrategy', () => {
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
     });
+
+    it('accounts for open positions in trade sizing', () => {
+      // cash=$250 (25_000 cents), open=$250 (25_000 cents) → total=$500
+      // 25% of $500 = $125, capped at cash $250 → spend $125
+      // ask=0.94 → floor(12500/94) = 132 contracts
+      const market = makeMarket({ yesAsk: 0.94 });
+      const signal = strategy.evaluateEntry(market, 25_000, 25_000);
+      expect(signal.action).toBe('buy');
+      expect(signal.suggestedContracts).toBe(132);
+    });
+
+    it('caps spend at available cash even when open positions are large', () => {
+      // cash=$100 (10_000 cents), open=$900 (90_000 cents) → total=$1000
+      // 25% of $1000 = $250, but cash is only $100 → capped at $100
+      // ask=0.94 → floor(10000/94) = 106 contracts
+      const market = makeMarket({ yesAsk: 0.94 });
+      const signal = strategy.evaluateEntry(market, 10_000, 90_000);
+      expect(signal.action).toBe('buy');
+      expect(signal.suggestedContracts).toBe(106);
+    });
   });
 
   describe('evaluateExit', () => {
