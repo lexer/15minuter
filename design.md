@@ -65,8 +65,8 @@ The 70/30 blend was calibrated via backtest on 2026-04-06 game data: it exits lo
 3. bid ≤ 80¢ AND blended winProbability < 85% → require **3 consecutive ticks**, then sell at bid
 4. bid > 80¢ → hold
 
-### 6. Position Sizing — Kelly Fraction
-Size is `25% × totalFunds` where `totalFunds = cashBalance + openPositionCostBasis`, capped at available cash. This accounts for deployed capital when sizing new entries, preventing over-allocation when multiple positions are open simultaneously.
+### 6. Position Sizing
+Size is `25% × totalFunds` where `totalFunds = cashBalance + openPositionCostBasis`, capped at available cash. This accounts for deployed capital when sizing new entries, preventing over-allocation when multiple positions are open simultaneously. The Kelly fraction is computed to confirm positive edge exists before entry, but sizing uses the flat 25% fraction regardless of Kelly magnitude.
 
 ### 7. Market Discovery
 Basketball game-winner markets are discovered via the `KXNBAGAME` series ticker. Each event ticker encodes date and team codes (e.g. `KXNBAGAME-26APR06HOUGSW`). Team codes are mapped from Kalshi 3-letter codes to NBA tricodes via a static lookup table.
@@ -87,6 +87,13 @@ Two PST-dated log files are written per game day:
 | `analysis_YYYY-MM-DD.log` | JSON-lines | Per-tick structured data: games, markets, signals, decisions, open positions, summary |
 
 Both use **PST (America/Los_Angeles)** timezone for date grouping — one file per NBA game day. The analysis log rolls over at PST midnight each tick; the agent log uses the PST date at startup.
+
+Analysis log compaction rules:
+- Only games with `gameStatus === 2` (live) are included
+- `decisions` array omitted when empty; hold-type decisions never logged (redundant with `signal` in market snapshots)
+- `openPositions` array omitted when empty
+- Signal/reason fields skipped on blowout markets (ask ≤ 10¢ or ≥ 99¢)
+- Win probability rounded to 4 decimal places; PnL to 2dp
 
 ### 10. Dependency Injection
 All services accept dependencies through the constructor for unit-testable components. The live API integration test suite makes real Kalshi API requests to verify authentication and response shapes.
@@ -122,3 +129,7 @@ write analysis tick to analysis_YYYY-MM-DD.log
 | `agent_YYYY-MM-DD.log` | Full agent console output |
 
 `trade_history.json` and `*.log` files are excluded from git.
+
+## Tools
+
+`scripts/backtest_blend.py` — Simulates exit logic against a saved analysis log for a set of known trades, sweeping blend weights. Used to calibrate the 70/30 model/market blend. Edit `TRADES` and `LOG_FILE` constants to run against new game data.
