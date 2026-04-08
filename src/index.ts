@@ -58,8 +58,12 @@ function isTransientNetworkError(msg: string): boolean {
     msg.includes('ENOTFOUND') ||
     msg.includes('ECONNRESET') ||
     msg.includes('ECONNREFUSED') ||
+    msg.includes('ETIMEDOUT') ||
     msg.includes('UND_ERR_SOCKET') ||
-    msg.includes('fetch failed') && (msg.includes('getaddrinfo') || msg.includes('other side closed'))
+    msg.includes('UND_ERR_CONNECT_TIMEOUT') ||
+    msg.includes('ConnectTimeoutError') ||
+    msg.includes('Connect Timeout Error') ||
+    (msg.includes('fetch failed') && (msg.includes('getaddrinfo') || msg.includes('other side closed')))
   );
 }
 
