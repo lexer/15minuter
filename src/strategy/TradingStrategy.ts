@@ -8,6 +8,7 @@ export const ENTRY_MAX_SECONDS = 480;               // only enter in final 8 min
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;
 export const EXIT_PROBABILITY_GUARD = 0.85; // don't exit on bid dip if model prob is above this
 export const EXIT_CONFIRMATION_TICKS = 3;   // consecutive ticks below bid threshold required to exit
+export const EXIT_EMERGENCY_DROP = 0.15;    // single-tick bid crash threshold — exit immediately bypassing prob guard
 
 // Risk 25% of current balance on a single trade
 const MAX_BALANCE_RISK_FRACTION = 0.25;
@@ -26,6 +27,7 @@ export interface TradeSignal {
 export class TradingStrategy {
   private readonly highAskCounts = new Map<string, number>(); // entry confirmation
   private readonly lowBidCounts = new Map<string, number>();  // exit confirmation
+  private readonly previousBids = new Map<string, number>();  // emergency exit: track last bid per position
 
   private isTradeable(status: string): boolean {
     return status === 'open' || status === 'active';
@@ -37,6 +39,7 @@ export class TradingStrategy {
 
   clearExitConfirmation(ticker: string): void {
     this.lowBidCounts.delete(ticker);
+    this.previousBids.delete(ticker);
   }
 
   /**
@@ -166,9 +169,25 @@ export class TradingStrategy {
   evaluateExit(market: BasketballMarket, heldContracts: number): TradeSignal {
     if (!this.isTradeable(market.status)) {
       this.lowBidCounts.delete(market.ticker);
+      this.previousBids.delete(market.ticker);
       return {
         action: 'sell',
         reason: `Market ${market.status} — closing position`,
+        market,
+        suggestedContracts: heldContracts,
+        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
+      };
+    }
+
+    // Emergency exit: single-tick bid crash (≥15¢ drop) overrides probability guard
+    const prevBid = this.previousBids.get(market.ticker);
+    this.previousBids.set(market.ticker, market.yesBid);
+    if (prevBid !== undefined && prevBid - market.yesBid >= EXIT_EMERGENCY_DROP) {
+      this.lowBidCounts.delete(market.ticker);
+      this.previousBids.delete(market.ticker);
+      return {
+        action: 'sell',
+        reason: `Emergency exit: bid crashed ${(prevBid * 100).toFixed(0)}¢→${(market.yesBid * 100).toFixed(0)}¢ (${((prevBid - market.yesBid) * 100).toFixed(0)}¢ drop in one tick)`,
         market,
         suggestedContracts: heldContracts,
         suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
