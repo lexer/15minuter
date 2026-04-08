@@ -53,11 +53,24 @@ const logStream = fs.createWriteStream(logPath, { flags: 'a' });
 const errorStream = fs.createWriteStream(errorLogPath, { flags: 'a' });
 
 process.stdout.write = logStream.write.bind(logStream);
+function isTransientNetworkError(msg: string): boolean {
+  return (
+    msg.includes('ENOTFOUND') ||
+    msg.includes('ECONNRESET') ||
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('UND_ERR_SOCKET') ||
+    msg.includes('fetch failed') && (msg.includes('getaddrinfo') || msg.includes('other side closed'))
+  );
+}
+
 process.stderr.write = (chunk: string | Uint8Array, ...args: unknown[]) => {
   const ts = new Date().toISOString();
-  const line = `[${ts}] ${chunk}`;
-  errorStream.write(line);
-  logStream.write(line);  // also mirror to agent log for context
+  const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8');
+  const line = `[${ts}] ${text}`;
+  logStream.write(line);  // always mirror to agent log for context
+  if (!isTransientNetworkError(text)) {
+    errorStream.write(line);
+  }
   return true;
 };
 
