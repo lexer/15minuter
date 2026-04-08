@@ -100,11 +100,20 @@ export class TradingStrategy {
     }
 
     // Ask must exceed confirmation threshold for N consecutive ticks
+    // Also skip if ask is at maximum (100¢) — no profit potential and Kalshi rejects price=100
     if (market.yesAsk <= ENTRY_CONFIRMATION_THRESHOLD) {
       this.highAskCounts.delete(market.ticker);
       return {
         action: 'hold',
         reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ at or below confirmation threshold ${ENTRY_CONFIRMATION_THRESHOLD * 100}¢`,
+        market,
+      };
+    }
+    if (market.yesAsk >= 1.0) {
+      this.highAskCounts.delete(market.ticker);
+      return {
+        action: 'hold',
+        reason: `Ask 100¢ — no profit potential, skipping`,
         market,
       };
     }

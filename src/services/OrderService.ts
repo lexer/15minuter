@@ -22,7 +22,7 @@ export class OrderService {
       side: 'yes',
       count: contracts,
       type: 'limit',
-      yes_price: Math.round(limitPrice * 100),
+      yes_price: Math.min(99, Math.max(1, Math.round(limitPrice * 100))),
     };
     const resp = await this.client.placeOrder(req);
     return this.parseOrder(resp);
@@ -35,7 +35,7 @@ export class OrderService {
       side: 'yes',
       count: contracts,
       type: 'limit',
-      yes_price: Math.round(limitPrice * 100),
+      yes_price: Math.min(99, Math.max(1, Math.round(limitPrice * 100))),
     };
     const resp = await this.client.placeOrder(req);
     return this.parseOrder(resp);
