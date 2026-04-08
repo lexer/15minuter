@@ -16,6 +16,9 @@ export class TradingAgent {
   private cachedBalanceCents = 0;
   private lastBalanceFetch = 0;
   private lastLoggedBalanceCents = -1;
+  private readonly entryCooldowns = new Map<string, number>(); // ticker -> cooldown expiry ms
+
+  private static readonly ENTRY_COOLDOWN_MS = 60_000; // 60s cooldown after failed buy
 
   constructor(
     private readonly markets: MarketService,
@@ -153,8 +156,17 @@ export class TradingAgent {
 
     console.log(`[Agent] ${liveMarkets.length} Q4 market(s) found | deployed=$${(openPositionsCostCents / 100).toFixed(2)}`);
 
+    const now = Date.now();
     for (const market of liveMarkets) {
       if (openTickers.has(market.ticker)) continue;
+
+      // Skip tickers in cooldown after a failed buy
+      const cooldownUntil = this.entryCooldowns.get(market.ticker);
+      if (cooldownUntil !== undefined && now < cooldownUntil) {
+        const secsLeft = Math.ceil((cooldownUntil - now) / 1000);
+        console.log(`[Agent] SKIP ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}% | cooldown after failed buy (${secsLeft}s remaining)`);
+        continue;
+      }
 
       const signal = this.strategy.evaluateEntry(market, balanceCents, openPositionsCostCents);
       this.analysis.logMarketEval(market, signal);
@@ -165,6 +177,13 @@ export class TradingAgent {
         );
         this.strategy.clearEntryConfirmation(market.ticker);
         const orderId = await this.executeEntry(market, signal.suggestedContracts!, signal.suggestedLimitPrice!);
+        if (orderId === undefined) {
+          // Buy failed — apply cooldown so confirmation doesn't immediately re-trigger
+          this.entryCooldowns.set(market.ticker, Date.now() + TradingAgent.ENTRY_COOLDOWN_MS);
+          this.strategy.clearEntryConfirmation(market.ticker);
+        } else {
+          this.entryCooldowns.delete(market.ticker);
+        }
         this.analysis.logDecision({
           type: 'entry',
           ticker: market.ticker,
