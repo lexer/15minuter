@@ -212,7 +212,7 @@ export class MarketService {
       noBid,
       noAsk,
       lastPrice: last,
-      volume: m.volume_fp ? parseFloat(m.volume_fp) : (m.volume ?? 0),
+      volume: m.volume_fp ? parseFloat(m.volume_fp) : 0,
       closeTime: new Date(m.close_time),
       winProbability,
       isQ4: false, // set later once game state is attached

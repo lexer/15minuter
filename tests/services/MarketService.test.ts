@@ -48,11 +48,10 @@ function makeRawMarket(overrides: Partial<KalshiMarket> = {}): KalshiMarket {
     last_price_dollars: '0.93',
     volume_fp: '500',
     close_time: new Date(Date.now() + 7200000).toISOString(),
-    expiration_time: new Date(Date.now() + 7200000).toISOString(),
+    latest_expiration_time: new Date(Date.now() + 7200000).toISOString(),
     can_close_early: true,
     rules_primary: 'Will the Los Angeles L win the game?',
     rules_secondary: '',
-    series_ticker: 'KXNBAGAME',
     ...overrides,
   };
 }

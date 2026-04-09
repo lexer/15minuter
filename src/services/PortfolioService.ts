@@ -51,20 +51,15 @@ export class PortfolioService {
   }
 
   private parseContracts(p: KalshiPosition): number {
-    if (p.position_fp !== undefined) return parseFloat(p.position_fp);
-    return (p.yes_position ?? 0) - (p.no_position ?? 0);
+    return parseFloat(p.position_fp ?? '0');
   }
 
   private parsePosition(p: KalshiPosition): Position {
     return {
       ticker: p.ticker,
       contracts: this.parseContracts(p),
-      marketExposureDollars: p.market_exposure_dollars
-        ? parseFloat(p.market_exposure_dollars)
-        : (p.market_exposure ?? 0) / 100,
-      realizedPnlDollars: p.realized_pnl_dollars
-        ? parseFloat(p.realized_pnl_dollars)
-        : (p.realized_pnl ?? 0) / 100,
+      marketExposureDollars: p.market_exposure_dollars ? parseFloat(p.market_exposure_dollars) : 0,
+      realizedPnlDollars: p.realized_pnl_dollars ? parseFloat(p.realized_pnl_dollars) : 0,
     };
   }
 }
