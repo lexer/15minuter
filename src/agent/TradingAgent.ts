@@ -17,8 +17,10 @@ export class TradingAgent {
   private lastBalanceFetch = 0;
   private lastLoggedBalanceCents = -1;
   private readonly entryCooldowns = new Map<string, number>(); // ticker -> cooldown expiry ms
+  private tickCount = 0;
 
-  private static readonly ENTRY_COOLDOWN_MS = 10_000; // 10s cooldown after failed buy
+  private static readonly ENTRY_COOLDOWN_MS = 10_000;  // 10s cooldown after failed buy
+  private static readonly RECONCILE_INTERVAL = 15;     // reconcile every N ticks
 
   constructor(
     private readonly markets: MarketService,
@@ -53,7 +55,10 @@ export class TradingAgent {
     const allMarkets = await this.markets.getAllLiveBasketballMarkets();
     this.analysis.logGames(allGames, allMarkets);
 
-    await this.reconcileWithKalshi(allMarkets);
+    this.tickCount++;
+    if (this.tickCount % TradingAgent.RECONCILE_INTERVAL === 0) {
+      await this.reconcileWithKalshi(allMarkets);
+    }
     const openTrades = this.history.getOpenTrades();
     await this.manageOpenPositions();
     await this.scanForEntries(balanceCents, allMarkets.filter((m) => m.isQ4));
