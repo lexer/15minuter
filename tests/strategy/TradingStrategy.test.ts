@@ -300,6 +300,46 @@ describe('TradingStrategy', () => {
     });
   });
 
+  describe('evaluateTopUp', () => {
+    it('returns contracts shortfall when position is below target', () => {
+      // balance=$1000, open=$0, 25%=$250, ask=0.94 → target=floor(25000/94)=265; held=100 → topUp=165
+      const market = makeMarket({ yesAsk: 0.94 });
+      const result = strategy.evaluateTopUp(market, 100, 100_000, 0);
+      expect(result.contracts).toBe(165);
+    });
+
+    it('returns 0 when already at or above target', () => {
+      const market = makeMarket({ yesAsk: 0.94 });
+      const result = strategy.evaluateTopUp(market, 265, 100_000, 0);
+      expect(result.contracts).toBe(0);
+    });
+
+    it('returns 0 when ask is at or below entry threshold', () => {
+      const market = makeMarket({ yesAsk: 0.85 });
+      const result = strategy.evaluateTopUp(market, 0, 100_000, 0);
+      expect(result.contracts).toBe(0);
+    });
+
+    it('returns 0 when outside entry window', () => {
+      const market = makeMarket({ gameState: makeGameState(ENTRY_MAX_SECONDS + 60) });
+      const result = strategy.evaluateTopUp(market, 0, 100_000, 0);
+      expect(result.contracts).toBe(0);
+    });
+
+    it('returns 0 when no game state', () => {
+      const market = makeMarket({ gameState: undefined });
+      const result = strategy.evaluateTopUp(market, 0, 100_000, 0);
+      expect(result.contracts).toBe(0);
+    });
+
+    it('accounts for open positions in sizing', () => {
+      // cash=$250, open=$750 → total=$1000, 25%=$250 capped at $250, ask=0.94 → target=265; held=100 → topUp=165
+      const market = makeMarket({ yesAsk: 0.94 });
+      const result = strategy.evaluateTopUp(market, 100, 25_000, 75_000);
+      expect(result.contracts).toBe(165);
+    });
+  });
+
   describe('calculatePnl', () => {
     it('calculates positive PnL on a winning trade', () => {
       expect(strategy.calculatePnl(0.92, 0.97, 10)).toBeCloseTo(0.5);

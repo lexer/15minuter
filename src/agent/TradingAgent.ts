@@ -60,8 +60,11 @@ export class TradingAgent {
       await this.reconcileWithKalshi(allMarkets);
     }
     const openTrades = this.history.getOpenTrades();
-    await this.manageOpenPositions();
-    await this.scanForEntries(balanceCents, allMarkets.filter((m) => m.isQ4));
+    const openPositionsCostCents = Math.round(
+      openTrades.reduce((sum, t) => sum + (isFinite(t.totalCost) ? t.totalCost : 0), 0) * 100,
+    );
+    await this.manageOpenPositions(balanceCents, openPositionsCostCents);
+    await this.scanForEntries(balanceCents, allMarkets.filter((m) => m.isQ4), openPositionsCostCents);
 
     const summary = this.history.getSummary();
     this.logSummary(summary);
@@ -184,7 +187,7 @@ export class TradingAgent {
     }
   }
 
-  private async manageOpenPositions(): Promise<void> {
+  private async manageOpenPositions(balanceCents: number, openPositionsCostCents: number): Promise<void> {
     const openTrades = this.history.getOpenTrades();
 
     // Track current market state for analysis logging
@@ -234,6 +237,31 @@ export class TradingAgent {
         } else {
           console.log(`[Agent] HOLD ${record.ticker} @ prob=${(market.winProbability * 100).toFixed(1)}%`);
           this.analysis.logDecision({ type: 'hold', ticker: record.ticker, reason: signal.reason });
+
+          // Top-up: buy additional contracts if position is below target and entry criteria still hold
+          const cooldownUntil = this.entryCooldowns.get(record.ticker);
+          if (cooldownUntil === undefined || Date.now() >= cooldownUntil) {
+            const topUp = this.strategy.evaluateTopUp(market, record.contracts, balanceCents, openPositionsCostCents);
+            if (topUp.contracts > 0) {
+              console.log(`[Agent] TOP-UP ${record.ticker}: ${topUp.reason}`);
+              const fill = await this.executeTopUp(record, market, topUp.contracts, market.yesAsk);
+              if (fill === undefined || fill.filledCount === 0) {
+                this.entryCooldowns.set(record.ticker, Date.now() + TradingAgent.ENTRY_COOLDOWN_MS);
+              } else {
+                this.entryCooldowns.delete(record.ticker);
+              }
+              this.analysis.logDecision({
+                type: 'entry',
+                ticker: record.ticker,
+                reason: `Top-up: ${topUp.reason}`,
+                contracts: topUp.contracts,
+                filledContracts: fill?.filledCount,
+                fillStatus: fill === undefined || fill.filledCount === 0 ? 'unfilled' : fill.filledCount >= topUp.contracts ? 'filled' : 'partial',
+                price: market.yesAsk,
+                orderId: fill?.orderId,
+              });
+            }
+          }
         }
       } catch (err) {
         console.error(`[Agent] Error managing position ${record.ticker}:`, err);
@@ -243,12 +271,9 @@ export class TradingAgent {
     this.analysis.logOpenPositions(openTrades, openMarkets);
   }
 
-  private async scanForEntries(balanceCents: number, liveMarkets: BasketballMarket[]): Promise<void> {
+  private async scanForEntries(balanceCents: number, liveMarkets: BasketballMarket[], openPositionsCostCents: number): Promise<void> {
     const openTrades = this.history.getOpenTrades();
     const openTickers = new Set(openTrades.map((t) => t.ticker));
-    const openPositionsCostCents = Math.round(
-      openTrades.reduce((sum, t) => sum + (isFinite(t.totalCost) ? t.totalCost : 0), 0) * 100,
-    );
 
     console.log(`[Agent] ${liveMarkets.length} Q4 market(s) found | deployed=$${(openPositionsCostCents / 100).toFixed(2)}`);
 
@@ -356,6 +381,38 @@ export class TradingAgent {
       return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
       console.error(`[Agent] Failed to buy ${market.ticker}:`, err);
+    }
+  }
+
+  private async executeTopUp(
+    record: TradeRecord,
+    market: BasketballMarket,
+    contracts: number,
+    limitPrice: number,
+  ): Promise<{ orderId: string; filledCount: number } | undefined> {
+    try {
+      const order = await this.orders.buyYes(market.ticker, contracts, limitPrice);
+
+      if (order.filledCount === 0) {
+        console.log(`[Agent] Top-up order ${order.orderId} unfilled — no change to position`);
+        return { orderId: order.orderId, filledCount: 0 };
+      }
+
+      // Update existing record: weighted-average entry price, total cost, and contract count
+      const addedCost = order.filledCount * limitPrice;
+      const newContracts = record.contracts + order.filledCount;
+      const newAvgPrice = (record.totalCost + addedCost) / newContracts;
+      this.history.updateTrade(record.id, {
+        contracts: newContracts,
+        pricePerContract: newAvgPrice,
+        totalCost: record.totalCost + addedCost,
+      });
+      console.log(
+        `[Agent] TOP-UP filled ${order.filledCount}/${contracts} on ${record.ticker} @ $${limitPrice.toFixed(2)} | total=${newContracts} contracts avg=$${newAvgPrice.toFixed(2)} | orderId=${order.orderId}`,
+      );
+      return { orderId: order.orderId, filledCount: order.filledCount };
+    } catch (err) {
+      console.error(`[Agent] Failed to top-up ${record.ticker}:`, err);
     }
   }
 

@@ -33,9 +33,10 @@ export class OrderService {
       count: contracts,
       type: 'limit',
       yes_price: Math.min(99, Math.max(1, Math.round(limitPrice * 100))),
+      time_in_force: 'immediate_or_cancel',
     };
     const resp = await this.client.placeOrder(req);
-    return this.waitForFill(resp.order.order_id, this.parseOrder(resp));
+    return this.parseOrder(resp);
   }
 
   async sellYes(ticker: string, contracts: number, limitPrice: number): Promise<Order> {
@@ -46,9 +47,10 @@ export class OrderService {
       count: contracts,
       type: 'limit',
       yes_price: Math.min(99, Math.max(1, Math.round(limitPrice * 100))),
+      time_in_force: 'immediate_or_cancel',
     };
     const resp = await this.client.placeOrder(req);
-    return this.waitForFill(resp.order.order_id, this.parseOrder(resp));
+    return this.parseOrder(resp);
   }
 
   async cancelOrder(orderId: string): Promise<void> {

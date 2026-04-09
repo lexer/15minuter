@@ -232,6 +232,52 @@ export class TradingStrategy {
     return { action: 'hold', reason: `Hold — bid ${(market.yesBid * 100).toFixed(0)}¢ above exit threshold`, market };
   }
 
+  /**
+   * Check if an existing open position should be topped up to target size.
+   * No confirmation window — we're already committed to this position.
+   * Returns contracts to buy (0 if already at target or entry criteria not met).
+   */
+  evaluateTopUp(
+    market: BasketballMarket,
+    heldContracts: number,
+    balanceCents: number,
+    openPositionsCostCents: number,
+  ): { contracts: number; reason: string } {
+    if (!market.gameState) {
+      return { contracts: 0, reason: 'No game state' };
+    }
+
+    const secondsLeft = WinProbabilityModel.secondsRemaining(
+      market.gameState.period,
+      market.gameState.gameClock,
+    );
+    if (secondsLeft > ENTRY_MAX_SECONDS) {
+      return { contracts: 0, reason: `Outside entry window (${(secondsLeft / 60).toFixed(1)} min left)` };
+    }
+
+    if (market.yesAsk <= ENTRY_CONFIRMATION_THRESHOLD || market.yesAsk >= 1.0) {
+      return { contracts: 0, reason: `Ask ${(market.yesAsk * 100).toFixed(0)}¢ outside entry range` };
+    }
+
+    const totalFundsCents = balanceCents + openPositionsCostCents;
+    const maxSpendCents = Math.min(
+      Math.floor(totalFundsCents * MAX_BALANCE_RISK_FRACTION),
+      balanceCents,
+    );
+    const costPerContractCents = Math.round(market.yesAsk * 100);
+    const targetContracts = Math.floor(maxSpendCents / costPerContractCents);
+    const topUp = Math.max(0, targetContracts - heldContracts);
+
+    if (topUp <= 0) {
+      return { contracts: 0, reason: `Already at target size (held=${heldContracts} target=${targetContracts})` };
+    }
+
+    return {
+      contracts: topUp,
+      reason: `Top-up shortfall: have ${heldContracts}, target ${targetContracts} (ask=${(market.yesAsk * 100).toFixed(0)}¢)`,
+    };
+  }
+
   calculatePnl(entryPrice: number, exitPrice: number, contracts: number): number {
     return (exitPrice - entryPrice) * contracts;
   }
