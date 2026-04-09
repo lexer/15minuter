@@ -229,21 +229,31 @@ export class TradingAgent {
   ): Promise<string | undefined> {
     try {
       const order = await this.orders.buyYes(market.ticker, contracts, limitPrice);
+
+      if (order.filledCount === 0) {
+        console.log(`[Agent] Order ${order.orderId} unfilled and cancelled — no position recorded`);
+        return undefined;
+      }
+
+      if (order.filledCount < contracts) {
+        console.log(`[Agent] Partial fill: ${order.filledCount}/${contracts} contracts on ${market.ticker}`);
+      }
+
       const record: TradeRecord = {
         id: crypto.randomUUID(),
         ticker: market.ticker,
         marketTitle: market.title,
         side: 'yes',
         action: 'buy',
-        contracts,
+        contracts: order.filledCount,
         pricePerContract: limitPrice,
-        totalCost: contracts * limitPrice,
+        totalCost: order.filledCount * limitPrice,
         winProbabilityAtEntry: market.winProbability,
         entryTime: new Date().toISOString(),
       };
       this.history.recordTrade(record);
       console.log(
-        `[Agent] Bought ${contracts} YES contracts on ${market.ticker} @ $${limitPrice.toFixed(2)} | orderId=${order.orderId}`,
+        `[Agent] Bought ${order.filledCount} YES contracts on ${market.ticker} @ $${limitPrice.toFixed(2)} | orderId=${order.orderId}`,
       );
       return order.orderId;
     } catch (err) {
@@ -258,15 +268,30 @@ export class TradingAgent {
   ): Promise<string | undefined> {
     try {
       const order = await this.orders.sellYes(record.ticker, record.contracts, limitPrice);
-      const pnl = this.strategy.calculatePnl(record.pricePerContract, limitPrice, record.contracts);
-      this.history.updateTrade(record.id, {
-        exitTime: new Date().toISOString(),
-        winProbabilityAtExit: market.winProbability,
-        pnl,
-        exitReason: market.status !== 'open' ? 'game_over' : 'probability_drop',
-      });
+
+      const soldContracts = order.filledCount;
+      if (soldContracts === 0) {
+        console.log(`[Agent] Sell order ${order.orderId} unfilled — position remains open`);
+        return undefined;
+      }
+
+      if (soldContracts < record.contracts) {
+        console.log(`[Agent] Partial sell: ${soldContracts}/${record.contracts} contracts on ${record.ticker}`);
+        // Update position to reflect remaining contracts still held
+        this.history.updateTrade(record.id, { contracts: record.contracts - soldContracts });
+      }
+
+      const pnl = this.strategy.calculatePnl(record.pricePerContract, limitPrice, soldContracts);
+      if (soldContracts === record.contracts) {
+        this.history.updateTrade(record.id, {
+          exitTime: new Date().toISOString(),
+          winProbabilityAtExit: market.winProbability,
+          pnl,
+          exitReason: market.status !== 'open' ? 'game_over' : 'probability_drop',
+        });
+      }
       console.log(
-        `[Agent] Sold ${record.contracts} contracts on ${record.ticker} @ $${limitPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} | orderId=${order.orderId}`,
+        `[Agent] Sold ${soldContracts} contracts on ${record.ticker} @ $${limitPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} | orderId=${order.orderId}`,
       );
       return order.orderId;
     } catch (err) {

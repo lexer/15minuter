@@ -153,6 +153,10 @@ export class KalshiClient {
     return this.request<KalshiOrderResponse>('POST', '/portfolio/orders', order);
   }
 
+  async getOrder(orderId: string): Promise<KalshiOrderResponse> {
+    return this.request<KalshiOrderResponse>('GET', `/portfolio/orders/${orderId}`);
+  }
+
   async cancelOrder(orderId: string): Promise<void> {
     await this.request<unknown>('DELETE', `/portfolio/orders/${orderId}`);
   }
