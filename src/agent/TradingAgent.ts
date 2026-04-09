@@ -18,7 +18,7 @@ export class TradingAgent {
   private lastLoggedBalanceCents = -1;
   private readonly entryCooldowns = new Map<string, number>(); // ticker -> cooldown expiry ms
 
-  private static readonly ENTRY_COOLDOWN_MS = 60_000; // 60s cooldown after failed buy
+  private static readonly ENTRY_COOLDOWN_MS = 10_000; // 10s cooldown after failed buy
 
   constructor(
     private readonly markets: MarketService,
