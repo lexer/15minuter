@@ -236,14 +236,14 @@ describe('TradingStrategy', () => {
 
   describe('evaluateExit', () => {
     it('holds on first low-bid tick (confirmation window)', () => {
-      const market = makeMarket({ yesBid: 0.75, winProbability: 0.75 });
+      const market = makeMarket({ yesBid: 0.65, winProbability: 0.65 });
       const signal = strategy.evaluateExit(market, 5);
       expect(signal.action).toBe('hold');
       expect(signal.reason).toMatch(/confirming \(1\//);
     });
 
     it('sells after EXIT_CONFIRMATION_TICKS consecutive low-bid ticks', () => {
-      const market = makeMarket({ yesBid: 0.75, winProbability: 0.75 });
+      const market = makeMarket({ yesBid: 0.65, winProbability: 0.65 });
       for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
         expect(strategy.evaluateExit(market, 5).action).toBe('hold');
       }
@@ -252,8 +252,8 @@ describe('TradingStrategy', () => {
     });
 
     it('resets confirmation counter when bid recovers', () => {
-      const lowMarket = makeMarket({ yesBid: 0.75, winProbability: 0.75 });
-      const highMarket = makeMarket({ yesBid: 0.88, winProbability: 0.88 });
+      const lowMarket = makeMarket({ yesBid: 0.65, winProbability: 0.65 });
+      const highMarket = makeMarket({ yesBid: 0.77, winProbability: 0.77 }); // recovery < 15¢ above low to avoid emergency exit
 
       strategy.evaluateExit(lowMarket, 5);
       strategy.evaluateExit(lowMarket, 5);
@@ -265,14 +265,14 @@ describe('TradingStrategy', () => {
     });
 
     it('holds when bid is low but model probability is above guard', () => {
-      const market = makeMarket({ yesBid: 0.72, winProbability: EXIT_PROBABILITY_GUARD + 0.01 });
+      const market = makeMarket({ yesBid: 0.65, winProbability: EXIT_PROBABILITY_GUARD + 0.01 });
       for (let i = 0; i < EXIT_CONFIRMATION_TICKS + 2; i++) {
         expect(strategy.evaluateExit(market, 5).action).toBe('hold');
       }
     });
 
     it('sells when both bid is low and probability is below guard', () => {
-      const market = makeMarket({ yesBid: 0.72, winProbability: EXIT_PROBABILITY_GUARD - 0.01 });
+      const market = makeMarket({ yesBid: 0.65, winProbability: EXIT_PROBABILITY_GUARD - 0.01 });
       for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
         expect(strategy.evaluateExit(market, 5).action).toBe('hold');
       }

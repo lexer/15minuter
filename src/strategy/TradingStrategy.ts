@@ -4,8 +4,8 @@ import { WinProbabilityModel } from '../services/WinProbabilityModel';
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
 export const ENTRY_CONFIRMATION_THRESHOLD = 0.9;    // ask must exceed this for consecutive-tick confirmation (same as entry threshold)
 export const ENTRY_CONFIRMATION_TICKS = 3;          // consecutive ticks above threshold required before entry
-export const ENTRY_MAX_SECONDS = 480;               // only enter in final 8 minutes of game
-export const EXIT_PROBABILITY_THRESHOLD = 0.8;
+export const ENTRY_MAX_SECONDS = 600;               // only enter in final 10 minutes of game
+export const EXIT_PROBABILITY_THRESHOLD = 0.7;
 export const EXIT_PROBABILITY_GUARD = 0.85; // don't exit on bid dip if model prob is above this
 export const EXIT_CONFIRMATION_TICKS = 3;   // consecutive ticks below bid threshold required to exit
 export const EXIT_EMERGENCY_DROP = 0.15;    // single-tick bid crash threshold — exit immediately bypassing prob guard
