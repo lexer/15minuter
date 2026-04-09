@@ -126,14 +126,16 @@ export class TradingAgent {
         if (signal.action === 'sell') {
           console.log(`[Agent] EXIT ${record.ticker}: ${signal.reason}`);
           this.strategy.clearExitConfirmation(record.ticker);
-          const orderId = await this.executeExit(record, market, signal.suggestedLimitPrice ?? market.yesBid);
+          const fill = await this.executeExit(record, market, signal.suggestedLimitPrice ?? market.yesBid);
           this.analysis.logDecision({
             type: 'exit',
             ticker: record.ticker,
             reason: signal.reason,
             contracts: record.contracts,
+            filledContracts: fill?.filledCount,
+            fillStatus: fill === undefined ? 'unfilled' : fill.filledCount >= record.contracts ? 'filled' : fill.filledCount > 0 ? 'partial' : 'unfilled',
             price: signal.suggestedLimitPrice ?? market.yesBid,
-            orderId,
+            orderId: fill?.orderId,
           });
         } else {
           console.log(`[Agent] HOLD ${record.ticker} @ prob=${(market.winProbability * 100).toFixed(1)}%`);
@@ -176,9 +178,9 @@ export class TradingAgent {
           `[Agent] ENTRY ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}% | ${signal.suggestedContracts} contracts @ $${signal.suggestedLimitPrice?.toFixed(2)}`,
         );
         this.strategy.clearEntryConfirmation(market.ticker);
-        const orderId = await this.executeEntry(market, signal.suggestedContracts!, signal.suggestedLimitPrice!);
-        if (orderId === undefined) {
-          // Buy failed — apply cooldown so confirmation doesn't immediately re-trigger
+        const fill = await this.executeEntry(market, signal.suggestedContracts!, signal.suggestedLimitPrice!);
+        if (fill === undefined || fill.filledCount === 0) {
+          // Buy failed/unfilled — apply cooldown so confirmation doesn't immediately re-trigger
           this.entryCooldowns.set(market.ticker, Date.now() + TradingAgent.ENTRY_COOLDOWN_MS);
           this.strategy.clearEntryConfirmation(market.ticker);
         } else {
@@ -189,8 +191,10 @@ export class TradingAgent {
           ticker: market.ticker,
           reason: signal.reason,
           contracts: signal.suggestedContracts,
+          filledContracts: fill?.filledCount,
+          fillStatus: fill === undefined || fill.filledCount === 0 ? 'unfilled' : fill.filledCount >= signal.suggestedContracts! ? 'filled' : 'partial',
           price: signal.suggestedLimitPrice,
-          orderId,
+          orderId: fill?.orderId,
         });
       } else {
         console.log(`[Agent] SKIP ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}% | ${signal.reason}`);
@@ -226,13 +230,13 @@ export class TradingAgent {
     market: BasketballMarket,
     contracts: number,
     limitPrice: number,
-  ): Promise<string | undefined> {
+  ): Promise<{ orderId: string; filledCount: number } | undefined> {
     try {
       const order = await this.orders.buyYes(market.ticker, contracts, limitPrice);
 
       if (order.filledCount === 0) {
         console.log(`[Agent] Order ${order.orderId} unfilled and cancelled — no position recorded`);
-        return undefined;
+        return { orderId: order.orderId, filledCount: 0 };
       }
 
       if (order.filledCount < contracts) {
@@ -255,7 +259,7 @@ export class TradingAgent {
       console.log(
         `[Agent] Bought ${order.filledCount} YES contracts on ${market.ticker} @ $${limitPrice.toFixed(2)} | orderId=${order.orderId}`,
       );
-      return order.orderId;
+      return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
       console.error(`[Agent] Failed to buy ${market.ticker}:`, err);
     }
@@ -265,14 +269,14 @@ export class TradingAgent {
     record: TradeRecord,
     market: BasketballMarket,
     limitPrice: number,
-  ): Promise<string | undefined> {
+  ): Promise<{ orderId: string; filledCount: number } | undefined> {
     try {
       const order = await this.orders.sellYes(record.ticker, record.contracts, limitPrice);
 
       const soldContracts = order.filledCount;
       if (soldContracts === 0) {
         console.log(`[Agent] Sell order ${order.orderId} unfilled — position remains open`);
-        return undefined;
+        return { orderId: order.orderId, filledCount: 0 };
       }
 
       if (soldContracts < record.contracts) {
@@ -293,7 +297,7 @@ export class TradingAgent {
       console.log(
         `[Agent] Sold ${soldContracts} contracts on ${record.ticker} @ $${limitPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} | orderId=${order.orderId}`,
       );
-      return order.orderId;
+      return { orderId: order.orderId, filledCount: soldContracts };
     } catch (err) {
       console.error(`[Agent] Failed to sell ${record.ticker}:`, err);
     }

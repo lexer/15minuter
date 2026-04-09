@@ -47,10 +47,12 @@ export interface DecisionLog {
   type: 'entry' | 'exit' | 'hold';
   ticker: string;
   reason: string;
-  contracts?: number;
+  contracts?: number;       // requested contracts
+  filledContracts?: number; // actually filled (omitted when equal to contracts)
   price?: number;
   pnl?: number;
   orderId?: string;
+  fillStatus?: 'filled' | 'partial' | 'unfilled';
 }
 
 export interface PositionAnalysis {
