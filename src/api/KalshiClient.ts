@@ -10,6 +10,7 @@ import {
   KalshiBalance,
   KalshiOrderBook,
   KalshiTradesResponse,
+  KalshiFillsResponse,
   PlaceOrderRequest,
   KalshiMarket,
 } from './types';
@@ -194,7 +195,7 @@ export class KalshiClient {
     cursor?: string;
     min_ts?: number;
     max_ts?: number;
-  }): Promise<KalshiTradesResponse> {
+  }): Promise<KalshiFillsResponse> {
     const qs = new URLSearchParams();
     if (params) {
       Object.entries(params).forEach(([k, v]) => {
@@ -202,7 +203,7 @@ export class KalshiClient {
       });
     }
     const query = qs.toString() ? `?${qs.toString()}` : '';
-    return this.request<KalshiTradesResponse>(
+    return this.request<KalshiFillsResponse>(
       'GET',
       `/portfolio/fills${query}`,
     );
