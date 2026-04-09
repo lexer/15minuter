@@ -247,7 +247,7 @@ export class TradingAgent {
     const openTrades = this.history.getOpenTrades();
     const openTickers = new Set(openTrades.map((t) => t.ticker));
     const openPositionsCostCents = Math.round(
-      openTrades.reduce((sum, t) => sum + t.totalCost, 0) * 100,
+      openTrades.reduce((sum, t) => sum + (isFinite(t.totalCost) ? t.totalCost : 0), 0) * 100,
     );
 
     console.log(`[Agent] ${liveMarkets.length} Q4 market(s) found | deployed=$${(openPositionsCostCents / 100).toFixed(2)}`);

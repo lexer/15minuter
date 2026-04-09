@@ -91,7 +91,7 @@ export class OrderService {
       side: o.side,
       action: o.action,
       count: o.count,
-      filledCount: o.filled_count,
+      filledCount: o.filled_count ?? 0,
       yesPrice: o.yes_price / 100,
       status: o.status,
       placedAt: new Date(o.place_time),
