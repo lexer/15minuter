@@ -155,10 +155,6 @@ export class KalshiClient {
     return this.request<KalshiOrderResponse>('POST', '/portfolio/orders', order);
   }
 
-  async getOrder(orderId: string): Promise<KalshiOrderResponse> {
-    return this.request<KalshiOrderResponse>('GET', `/portfolio/orders/${orderId}`);
-  }
-
   async getOpenOrders(params?: { ticker?: string; limit?: number }): Promise<KalshiOpenOrdersResponse> {
     const qs = new URLSearchParams({ status: 'resting' });
     if (params?.ticker) qs.set('ticker', params.ticker);
@@ -166,9 +162,6 @@ export class KalshiClient {
     return this.request<KalshiOpenOrdersResponse>('GET', `/portfolio/orders?${qs.toString()}`);
   }
 
-  async cancelOrder(orderId: string): Promise<void> {
-    await this.request<unknown>('DELETE', `/portfolio/orders/${orderId}`);
-  }
 
   async getPositions(params?: {
     ticker?: string;
