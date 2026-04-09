@@ -1,5 +1,5 @@
 import { KalshiClient } from '../api/KalshiClient';
-import { KalshiPosition } from '../api/types';
+import { KalshiPosition, KalshiOpenOrder } from '../api/types';
 
 export interface Position {
   ticker: string;
@@ -39,6 +39,11 @@ export class PortfolioService {
     const p = resp.market_positions[0];
     if (!p || this.parseContracts(p) === 0) return null;
     return this.parsePosition(p);
+  }
+
+  async getOpenOrders(): Promise<KalshiOpenOrder[]> {
+    const resp = await this.client.getOpenOrders({ limit: 100 });
+    return resp.orders;
   }
 
   isBudgetExhausted(currentBalanceCents: number): boolean {

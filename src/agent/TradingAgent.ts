@@ -53,6 +53,7 @@ export class TradingAgent {
     const allMarkets = await this.markets.getAllLiveBasketballMarkets();
     this.analysis.logGames(allGames, allMarkets);
 
+    await this.reconcileWithKalshi(allMarkets);
     const openTrades = this.history.getOpenTrades();
     await this.manageOpenPositions();
     await this.scanForEntries(balanceCents, allMarkets.filter((m) => m.isQ4));
@@ -88,6 +89,94 @@ export class TradingAgent {
   stop(): void {
     this.running = false;
     console.log('[Agent] Stopping...');
+  }
+
+  /**
+   * Reconcile local TradeHistory against Kalshi's actual positions and resting orders.
+   * - External positions (on Kalshi but not in history) are adopted so the agent can manage them.
+   * - Externally closed positions (in history but gone from Kalshi) are marked closed.
+   * - Resting orders not placed by this agent are logged as warnings.
+   */
+  private async reconcileWithKalshi(allMarkets: BasketballMarket[]): Promise<void> {
+    try {
+      const [portfolio, openOrders] = await Promise.all([
+        this.portfolio.getPortfolio(),
+        this.portfolio.getOpenOrders(),
+      ]);
+
+      const openTrades = this.history.getOpenTrades();
+      const trackedTickers = new Set(openTrades.map((t) => t.ticker));
+      const marketMap = new Map(allMarkets.map((m) => [m.ticker, m]));
+
+      // ── Adopt external positions ────────────────────────────────────────────
+      for (const pos of portfolio.positions) {
+        if (pos.contracts <= 0) continue;
+        if (trackedTickers.has(pos.ticker)) continue;
+
+        // Only adopt basketball markets we're watching
+        const market = marketMap.get(pos.ticker);
+        if (!market) continue;
+
+        console.log(`[Agent] EXTERNAL POSITION detected: ${pos.ticker} x${pos.contracts} — adopting into history`);
+        const record: TradeRecord = {
+          id: crypto.randomUUID(),
+          ticker: pos.ticker,
+          marketTitle: market.title,
+          side: 'yes',
+          action: 'buy',
+          contracts: pos.contracts,
+          pricePerContract: market.yesAsk, // best estimate — actual entry price unknown
+          totalCost: pos.contracts * market.yesAsk,
+          winProbabilityAtEntry: market.winProbability,
+          entryTime: new Date().toISOString(),
+        };
+        this.history.recordTrade(record);
+        this.analysis.logDecision({
+          type: 'entry',
+          ticker: pos.ticker,
+          reason: 'External position adopted into tracking',
+          contracts: pos.contracts,
+          filledContracts: pos.contracts,
+          fillStatus: 'filled',
+          price: market.yesAsk,
+        });
+      }
+
+      // ── Detect externally closed positions ─────────────────────────────────
+      const kalshiTickers = new Set(portfolio.positions.filter((p) => p.contracts > 0).map((p) => p.ticker));
+      for (const trade of openTrades) {
+        if (!kalshiTickers.has(trade.ticker)) {
+          // Only flag if this is a market we'd expect to still be active
+          if (marketMap.has(trade.ticker)) {
+            console.log(`[Agent] EXTERNAL CLOSE detected: ${trade.ticker} no longer in Kalshi positions — marking closed`);
+            this.history.updateTrade(trade.id, {
+              exitTime: new Date().toISOString(),
+              exitReason: 'manual',
+              pnl: 0, // unknown — externally closed
+            });
+            this.analysis.logDecision({
+              type: 'exit',
+              ticker: trade.ticker,
+              reason: 'Externally closed — position no longer present on Kalshi',
+              contracts: trade.contracts,
+              fillStatus: 'filled',
+            });
+          }
+        }
+      }
+
+      // ── Log resting orders not placed by this agent ────────────────────────
+      const agentOrderIds = new Set<string>(); // agent-placed orders aren't tracked beyond fill
+      for (const order of openOrders) {
+        if (agentOrderIds.has(order.order_id)) continue;
+        if (!marketMap.has(order.ticker)) continue;
+        console.log(
+          `[Agent] EXTERNAL RESTING ORDER: ${order.ticker} | ${order.action} ${order.side} x${order.remaining_count} @ ${order.yes_price}¢ | orderId=${order.order_id}`,
+        );
+      }
+    } catch (err) {
+      console.error('[Agent] Reconciliation error:', err);
+    }
   }
 
   private async manageOpenPositions(): Promise<void> {

@@ -5,6 +5,7 @@ import {
   KalshiMarketsResponse,
   KalshiEventsResponse,
   KalshiOrderResponse,
+  KalshiOpenOrdersResponse,
   KalshiPositionsResponse,
   KalshiBalance,
   KalshiOrderBook,
@@ -155,6 +156,13 @@ export class KalshiClient {
 
   async getOrder(orderId: string): Promise<KalshiOrderResponse> {
     return this.request<KalshiOrderResponse>('GET', `/portfolio/orders/${orderId}`);
+  }
+
+  async getOpenOrders(params?: { ticker?: string; limit?: number }): Promise<KalshiOpenOrdersResponse> {
+    const qs = new URLSearchParams({ status: 'resting' });
+    if (params?.ticker) qs.set('ticker', params.ticker);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    return this.request<KalshiOpenOrdersResponse>('GET', `/portfolio/orders?${qs.toString()}`);
   }
 
   async cancelOrder(orderId: string): Promise<void> {

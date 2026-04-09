@@ -107,6 +107,25 @@ export interface KalshiTrade {
   created_time: string;
 }
 
+export interface KalshiOpenOrder {
+  order_id: string;
+  ticker: string;
+  side: OrderSide;
+  action: OrderAction;
+  count: number;
+  filled_count: number;
+  remaining_count: number;
+  yes_price: number;
+  status: string;
+  place_time: string;
+  type: string;
+}
+
+export interface KalshiOpenOrdersResponse {
+  orders: KalshiOpenOrder[];
+  cursor: string;
+}
+
 export type OrderSide = 'yes' | 'no';
 export type OrderAction = 'buy' | 'sell';
 export type OrderType = 'limit' | 'market';
