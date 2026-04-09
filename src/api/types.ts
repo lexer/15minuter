@@ -50,18 +50,18 @@ export interface KalshiOrderResponse {
     order_id: string;
     user_id: string;
     ticker: string;
-    status: string;
-    yes_price: number;
-    no_price: number;
+    status: 'resting' | 'canceled' | 'executed';
     side: OrderSide;
     action: OrderAction;
-    count: number;
-    filled_count: number;
-    remaining_count: number;
-    place_time: string;
-    close_time?: string;
-    expiration_time?: string;
     type: string;
+    yes_price_dollars: string;   // FixedPointDollars, e.g. "0.9100"
+    no_price_dollars: string;
+    initial_count_fp: string;    // FixedPointCount, e.g. "203.00"
+    fill_count_fp: string;       // contracts filled so far
+    remaining_count_fp: string;  // contracts still resting
+    created_time: string | null;
+    last_update_time: string | null;
+    expiration_time: string | null;
   };
 }
 
@@ -112,13 +112,13 @@ export interface KalshiOpenOrder {
   ticker: string;
   side: OrderSide;
   action: OrderAction;
-  count: number;
-  filled_count: number;
-  remaining_count: number;
-  yes_price: number;
-  status: string;
-  place_time: string;
   type: string;
+  status: 'resting' | 'canceled' | 'executed';
+  yes_price_dollars: string;
+  initial_count_fp: string;
+  fill_count_fp: string;
+  remaining_count_fp: string;
+  created_time: string | null;
 }
 
 export interface KalshiOpenOrdersResponse {

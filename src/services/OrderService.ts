@@ -1,5 +1,5 @@
 import { KalshiClient } from '../api/KalshiClient';
-import { OrderAction, OrderSide, PlaceOrderRequest } from '../api/types';
+import { KalshiOrderResponse, OrderAction, OrderSide, PlaceOrderRequest } from '../api/types';
 
 export interface Order {
   orderId: string;
@@ -8,8 +8,9 @@ export interface Order {
   action: OrderAction;
   count: number;
   filledCount: number;
+  remainingCount: number;
   yesPrice: number;
-  status: string;
+  status: 'resting' | 'canceled' | 'executed';
   placedAt: Date;
 }
 
@@ -55,24 +56,23 @@ export class OrderService {
   }
 
   /**
-   * Polls until the order is fully filled or FILL_TIMEOUT_MS elapses.
+   * Polls until the order is executed/canceled or FILL_TIMEOUT_MS elapses.
    * Cancels any resting remainder and returns the order with actual filledCount.
    */
   private async waitForFill(orderId: string, initial: Order): Promise<Order> {
     let order = initial;
     const deadline = Date.now() + FILL_TIMEOUT_MS;
 
-    while (order.filledCount < order.count && Date.now() < deadline) {
+    while (order.status === 'resting' && Date.now() < deadline) {
       await sleep(FILL_POLL_INTERVAL_MS);
       const resp = await this.client.getOrder(orderId);
       order = this.parseOrder(resp);
     }
 
-    // Cancel resting remainder if partially or completely unfilled
-    if (order.filledCount < order.count && order.status !== 'canceled') {
+    // Cancel resting remainder if not fully executed within timeout
+    if (order.status === 'resting') {
       try {
         await this.client.cancelOrder(orderId);
-        // Re-fetch to get final filled count after cancel
         const resp = await this.client.getOrder(orderId);
         order = this.parseOrder(resp);
       } catch {
@@ -83,18 +83,19 @@ export class OrderService {
     return order;
   }
 
-  private parseOrder(resp: { order: { order_id: string; ticker: string; side: OrderSide; action: OrderAction; count: number; filled_count: number; yes_price: number; status: string; place_time: string } }): Order {
+  private parseOrder(resp: KalshiOrderResponse): Order {
     const o = resp.order;
     return {
       orderId: o.order_id,
       ticker: o.ticker,
       side: o.side,
       action: o.action,
-      count: o.count,
-      filledCount: o.filled_count ?? 0,
-      yesPrice: o.yes_price / 100,
+      count: parseFloat(o.initial_count_fp ?? '0'),
+      filledCount: parseFloat(o.fill_count_fp ?? '0'),
+      remainingCount: parseFloat(o.remaining_count_fp ?? '0'),
+      yesPrice: parseFloat(o.yes_price_dollars ?? '0'),
       status: o.status,
-      placedAt: new Date(o.place_time),
+      placedAt: new Date(o.created_time ?? Date.now()),
     };
   }
 }

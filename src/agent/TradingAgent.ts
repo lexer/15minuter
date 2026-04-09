@@ -176,7 +176,7 @@ export class TradingAgent {
         if (agentOrderIds.has(order.order_id)) continue;
         if (!marketMap.has(order.ticker)) continue;
         console.log(
-          `[Agent] EXTERNAL RESTING ORDER: ${order.ticker} | ${order.action} ${order.side} x${order.remaining_count} @ ${order.yes_price}¢ | orderId=${order.order_id}`,
+          `[Agent] EXTERNAL RESTING ORDER: ${order.ticker} | ${order.action} ${order.side} x${order.remaining_count_fp} @ $${order.yes_price_dollars} | orderId=${order.order_id}`,
         );
       }
     } catch (err) {
