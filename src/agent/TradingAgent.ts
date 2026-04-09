@@ -239,28 +239,20 @@ export class TradingAgent {
           this.analysis.logDecision({ type: 'hold', ticker: record.ticker, reason: signal.reason });
 
           // Top-up: buy additional contracts if position is below target and entry criteria still hold
-          const cooldownUntil = this.entryCooldowns.get(record.ticker);
-          if (cooldownUntil === undefined || Date.now() >= cooldownUntil) {
-            const topUp = this.strategy.evaluateTopUp(market, record.contracts, balanceCents, openPositionsCostCents);
-            if (topUp.contracts > 0) {
-              console.log(`[Agent] TOP-UP ${record.ticker}: ${topUp.reason}`);
-              const fill = await this.executeTopUp(record, market, topUp.contracts, market.yesAsk);
-              if (fill === undefined || fill.filledCount === 0) {
-                this.entryCooldowns.set(record.ticker, Date.now() + TradingAgent.ENTRY_COOLDOWN_MS);
-              } else {
-                this.entryCooldowns.delete(record.ticker);
-              }
-              this.analysis.logDecision({
-                type: 'entry',
-                ticker: record.ticker,
-                reason: `Top-up: ${topUp.reason}`,
-                contracts: topUp.contracts,
-                filledContracts: fill?.filledCount,
-                fillStatus: fill === undefined || fill.filledCount === 0 ? 'unfilled' : fill.filledCount >= topUp.contracts ? 'filled' : 'partial',
-                price: market.yesAsk,
-                orderId: fill?.orderId,
-              });
-            }
+          const topUp = this.strategy.evaluateTopUp(market, record.contracts, balanceCents, openPositionsCostCents);
+          if (topUp.contracts > 0) {
+            console.log(`[Agent] TOP-UP ${record.ticker}: ${topUp.reason}`);
+            const fill = await this.executeTopUp(record, market, topUp.contracts, market.yesAsk);
+            this.analysis.logDecision({
+              type: 'entry',
+              ticker: record.ticker,
+              reason: `Top-up: ${topUp.reason}`,
+              contracts: topUp.contracts,
+              filledContracts: fill?.filledCount,
+              fillStatus: fill === undefined || fill.filledCount === 0 ? 'unfilled' : fill.filledCount >= topUp.contracts ? 'filled' : 'partial',
+              price: market.yesAsk,
+              orderId: fill?.orderId,
+            });
           }
         }
       } catch (err) {
