@@ -19,7 +19,6 @@ export class TradingAgent {
   private readonly analysis    = new AnalysisLogger();
   private cachedBalanceCents   = 0;
   private lastLoggedBalance    = -1;
-  private readonly entryCooldowns  = new Map<string, number>(); // ticker → expiry ms
   private readonly pendingEntries  = new Set<string>();         // prevent concurrent orders
   private readonly intervals: ReturnType<typeof setInterval>[] = [];
 
@@ -260,10 +259,6 @@ export class TradingAgent {
     // Skip if a concurrent order is already in flight for this ticker
     if (this.pendingEntries.has(market.ticker)) return;
 
-    // Skip if in cooldown after a failed fill
-    const cooldown = this.entryCooldowns.get(market.ticker);
-    if (cooldown !== undefined && Date.now() < cooldown) return;
-
     const signal = this.strategy.evaluateEntry(market, this.cachedBalanceCents, openPositionsCostCents);
     this.analysis.logMarketEval(market, signal);
 
@@ -280,11 +275,6 @@ export class TradingAgent {
     this.pendingEntries.add(market.ticker);
     try {
       const fill = await this.executeEntry(market, signal.suggestedContracts!, signal.suggestedLimitPrice!);
-      if (!fill || fill.filledCount === 0) {
-        this.entryCooldowns.set(market.ticker, Date.now() + 10_000);
-      } else {
-        this.entryCooldowns.delete(market.ticker);
-      }
       this.analysis.logDecision({
         type: 'entry', ticker: market.ticker, reason: signal.reason,
         contracts: signal.suggestedContracts, filledContracts: fill?.filledCount,
