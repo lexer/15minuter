@@ -121,6 +121,12 @@ export class TradingAgent {
 
       console.log(`[Agent] ${q4Markets.length} Q4 market(s) | deployed=$${(openPositionsCostCents / 100).toFixed(2)}`);
 
+      // Populate analysis tick before evaluating markets (so logMarketEval can attach signals)
+      this.analysis.startTick(this.cachedBalanceCents);
+      this.analysis.logGames(allGames, this.markets.getCachedMarkets());
+      const marketMap = new Map(this.markets.getCachedMarkets().map((m) => [m.ticker, m]));
+      this.analysis.logOpenPositions(openTrades, marketMap);
+
       for (const market of q4Markets) {
         await this.handleMarket(market);
       }
