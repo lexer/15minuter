@@ -1,7 +1,6 @@
 import {
   TradingStrategy,
   ENTRY_PROBABILITY_THRESHOLD,
-  ENTRY_CONFIRMATION_TICKS,
   ENTRY_CONFIRMATION_THRESHOLD,
   ENTRY_MAX_SECONDS,
   EXIT_PROBABILITY_THRESHOLD,
@@ -53,19 +52,6 @@ function makeMarket(overrides: Partial<BasketballMarket> = {}): BasketballMarket
   };
 }
 
-// Helper: call evaluateEntry N times to satisfy the confirmation window
-function confirmEntry(
-  strategy: TradingStrategy,
-  market: BasketballMarket,
-  balanceCents: number,
-  ticks: number = ENTRY_CONFIRMATION_TICKS,
-) {
-  let signal = strategy.evaluateEntry(market, balanceCents);
-  for (let i = 1; i < ticks; i++) {
-    signal = strategy.evaluateEntry(market, balanceCents);
-  }
-  return signal;
-}
 
 describe('TradingStrategy', () => {
   let strategy: TradingStrategy;
@@ -114,90 +100,50 @@ describe('TradingStrategy', () => {
   });
 
   describe('evaluateEntry', () => {
-    it('returns buy after 3 consecutive ticks above threshold in final 5 min', () => {
+    it('returns buy on first tick when ask exceeds threshold in final 5 min', () => {
       const market = makeMarket({ yesAsk: 0.94 });
-      const signal = confirmEntry(strategy, market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.suggestedContracts).toBeGreaterThan(0);
       expect(signal.suggestedLimitPrice).toBe(0.94);
     });
 
-    it('holds on first tick (confirming 1/3)', () => {
-      const market = makeMarket({ yesAsk: 0.94 });
-      const signal = strategy.evaluateEntry(market, 100_000);
-      expect(signal.action).toBe('hold');
-      expect(signal.reason).toMatch(/confirming entry \(1\//);
-    });
-
-    it('holds on second tick (confirming 2/3)', () => {
-      const market = makeMarket({ yesAsk: 0.94 });
-      strategy.evaluateEntry(market, 100_000);
-      const signal = strategy.evaluateEntry(market, 100_000);
-      expect(signal.action).toBe('hold');
-      expect(signal.reason).toMatch(/confirming entry \(2\//);
-    });
-
-    it('resets confirmation counter when ask drops below threshold', () => {
-      const highMarket = makeMarket({ yesAsk: 0.94 });
-      const lowMarket = makeMarket({ yesAsk: 0.85 });
-
-      strategy.evaluateEntry(highMarket, 100_000);
-      strategy.evaluateEntry(highMarket, 100_000);
-      strategy.evaluateEntry(lowMarket, 100_000); // resets counter
-      // Now need full 3 ticks again
-      strategy.evaluateEntry(highMarket, 100_000);
-      const signal = strategy.evaluateEntry(highMarket, 100_000);
-      expect(signal.action).toBe('hold');
-      expect(signal.reason).toMatch(/confirming entry \(2\//);
-    });
-
     it('holds when more than 5 minutes remaining', () => {
       const market = makeMarket({ gameState: makeGameState(ENTRY_MAX_SECONDS + 60) });
-      const signal = confirmEntry(strategy, market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
       expect(signal.reason).toMatch(/entry only in final/);
     });
 
-    it('resets counter when time goes back above limit', () => {
-      const earlyMarket = makeMarket({ gameState: makeGameState(ENTRY_MAX_SECONDS + 60) });
-      const lateMarket = makeMarket({ yesAsk: 0.94, gameState: makeGameState(120) });
-      confirmEntry(strategy, lateMarket, 100_000); // 2 ticks of confirming
-      strategy.evaluateEntry(earlyMarket, 100_000); // resets counter
-      // Need full 3 ticks again
-      const signal = confirmEntry(strategy, lateMarket, 100_000, 2);
-      expect(signal.action).toBe('hold');
-      expect(signal.reason).toMatch(/confirming entry \(2\//);
-    });
-
     it('holds when no game state available', () => {
       const market = makeMarket({ gameState: undefined });
-      const signal = confirmEntry(strategy, market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
       expect(signal.reason).toMatch(/No game state/);
     });
 
     it('holds when ask is at or below entry threshold', () => {
       const market = makeMarket({ yesAsk: 0.85 });
-      const signal = confirmEntry(strategy, market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
     });
 
     it('holds when market status is not tradeable', () => {
       const market = makeMarket({ status: 'closed', yesAsk: 0.94 });
-      const signal = confirmEntry(strategy, market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('hold');
     });
 
     it('holds when balance is too small for 1 contract', () => {
       const market = makeMarket({ yesAsk: 0.94 });
-      const signal = confirmEntry(strategy, market, 50);
+      const signal = strategy.evaluateEntry(market, 50);
       expect(signal.action).toBe('hold');
     });
 
     it('sizes to 25% of balance', () => {
       // ask=0.91, balance=$1000 → 25% = $250 → floor(25000/91) = 274
       const market = makeMarket({ yesAsk: 0.91 });
-      const signal = confirmEntry(strategy, market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.suggestedContracts).toBe(274);
     });
@@ -205,7 +151,7 @@ describe('TradingStrategy', () => {
     it('sizes to 25% of balance at $1000 (current budget)', () => {
       // ask=0.95, balance=$1000 → 25% = $250 → floor(25000/95) = 263
       const market = makeMarket({ yesAsk: 0.95 });
-      const signal = confirmEntry(strategy, market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.suggestedContracts).toBe(263);
     });
@@ -213,11 +159,6 @@ describe('TradingStrategy', () => {
     it('accounts for open positions in trade sizing', () => {
       // cash=$250, open=$250 → total=$500, 25% = $125, ask=0.94 → floor(12500/94) = 132
       const market = makeMarket({ yesAsk: 0.94 });
-      const signal = confirmEntry(strategy, market, 25_000, ENTRY_CONFIRMATION_TICKS);
-      // Need to call with openPositionsCostCents on each tick
-      strategy = new TradingStrategy();
-      strategy.evaluateEntry(market, 25_000, 25_000);
-      strategy.evaluateEntry(market, 25_000, 25_000);
       const s = strategy.evaluateEntry(market, 25_000, 25_000);
       expect(s.action).toBe('buy');
       expect(s.suggestedContracts).toBe(132);
@@ -226,8 +167,6 @@ describe('TradingStrategy', () => {
     it('caps spend at available cash even when open positions are large', () => {
       // cash=$100, open=$900 → total=$1000, 25%=$250 capped at $100 → floor(10000/94)=106
       const market = makeMarket({ yesAsk: 0.94 });
-      strategy.evaluateEntry(market, 10_000, 90_000);
-      strategy.evaluateEntry(market, 10_000, 90_000);
       const s = strategy.evaluateEntry(market, 10_000, 90_000);
       expect(s.action).toBe('buy');
       expect(s.suggestedContracts).toBe(106);

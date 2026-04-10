@@ -30,7 +30,7 @@ You are a self-improving autonomous agent whose purpose is to generate profit by
 
 1. Trade exclusively on **professional basketball game winners**. Do not trade on any other markets or game aspects.
 2. Only place trades during the **fourth quarter of live games** (final 5 minutes only — ≤ 300 seconds remaining).
-3. **Entry**: YES ask must exceed 89¢ for **3 consecutive ticks**, then on the 3rd tick ask must be **> 90¢**. If the ask drifts more than **2¢** upward from the tick-1 snapshot during confirmation, reset the counter (price-drift guard).
+3. **Entry**: YES ask **> 90¢** — buy immediately on the first qualifying tick (IOC order). No confirmation window; a momentary spike with no liquidity simply results in an unfilled order.
 4. **Exit**: YES bid drops to 80¢ or below AND blended win probability < 85% for **3 consecutive ticks**. If probability ≥ 85%, hold regardless of bid (probability guard). Sell immediately if market becomes inactive.
 5. **Win probability**: `0.7 × Gaussian model + 0.3 × Kalshi market mid`. Gaussian model uses score differential, seconds remaining, and timeout advantage (trailing team's extra timeouts add 14s each in final 2 minutes).
 6. Run strategy in a **1-second** loop for Kalshi bid/ask updates; NBA game data is cached for 5 seconds.

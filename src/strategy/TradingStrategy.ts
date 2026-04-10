@@ -2,9 +2,7 @@ import { BasketballMarket } from '../services/MarketService';
 import { WinProbabilityModel } from '../services/WinProbabilityModel';
 
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
-export const ENTRY_CONFIRMATION_THRESHOLD = 0.9;    // ask must exceed this for consecutive-tick confirmation (same as entry threshold)
-export const ENTRY_CONFIRMATION_TICKS = 3;          // consecutive ticks above threshold required before entry
-export const ENTRY_PRICE_DRIFT_TOLERANCE = 0.02;    // max ask drift (2¢) from snapshot tick before confirmation resets
+export const ENTRY_CONFIRMATION_THRESHOLD = 0.9;    // ask must exceed this to enter
 export const ENTRY_MAX_SECONDS = 600;               // only enter in final 10 minutes of game
 export const EXIT_PROBABILITY_THRESHOLD = 0.7;
 export const EXIT_PROBABILITY_GUARD = 0.85; // don't exit on bid dip if model prob is above this
@@ -26,18 +24,11 @@ export interface TradeSignal {
 }
 
 export class TradingStrategy {
-  private readonly highAskCounts = new Map<string, number>(); // entry confirmation
-  private readonly entryAskSnapshots = new Map<string, number>(); // ask price at first confirmation tick
   private readonly lowBidCounts = new Map<string, number>();  // exit confirmation
   private readonly previousBids = new Map<string, number>();  // emergency exit: track last bid per position
 
   private isTradeable(status: string): boolean {
     return status === 'open' || status === 'active';
-  }
-
-  clearEntryConfirmation(ticker: string): void {
-    this.highAskCounts.delete(ticker);
-    this.entryAskSnapshots.delete(ticker);
   }
 
   clearExitConfirmation(ticker: string): void {
@@ -81,13 +72,11 @@ export class TradingStrategy {
     openPositionsCostCents: number = 0,
   ): TradeSignal {
     if (!this.isTradeable(market.status)) {
-      this.highAskCounts.delete(market.ticker);
       return { action: 'hold', reason: `Market not tradeable (status=${market.status})`, market };
     }
 
     // Require game state to verify time remaining
     if (!market.gameState) {
-      this.highAskCounts.delete(market.ticker);
       return { action: 'hold', reason: 'No game state — cannot verify time remaining', market };
     }
 
@@ -97,7 +86,6 @@ export class TradingStrategy {
       market.gameState.gameClock,
     );
     if (secondsLeft > ENTRY_MAX_SECONDS) {
-      this.highAskCounts.delete(market.ticker);
       return {
         action: 'hold',
         reason: `${(secondsLeft / 60).toFixed(1)} min remaining — entry only in final ${ENTRY_MAX_SECONDS / 60} min`,
@@ -105,61 +93,18 @@ export class TradingStrategy {
       };
     }
 
-    // Ask must exceed confirmation threshold for N consecutive ticks
-    // Also skip if ask is at maximum (100¢) — no profit potential and Kalshi rejects price=100
+    // Ask must exceed threshold to enter; skip if at 100¢ (no profit potential, Kalshi rejects price=100)
     if (market.yesAsk <= ENTRY_CONFIRMATION_THRESHOLD) {
-      this.highAskCounts.delete(market.ticker);
       return {
         action: 'hold',
-        reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ at or below confirmation threshold ${ENTRY_CONFIRMATION_THRESHOLD * 100}¢`,
+        reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ at or below entry threshold ${ENTRY_CONFIRMATION_THRESHOLD * 100}¢`,
         market,
       };
     }
     if (market.yesAsk >= 1.0) {
-      this.highAskCounts.delete(market.ticker);
       return {
         action: 'hold',
         reason: `Ask 100¢ — no profit potential, skipping`,
-        market,
-      };
-    }
-
-    const prevCount = this.highAskCounts.get(market.ticker) ?? 0;
-
-    // Snapshot the ask price on the first confirmation tick
-    if (prevCount === 0) {
-      this.entryAskSnapshots.set(market.ticker, market.yesAsk);
-    }
-
-    // Reset if price has drifted more than tolerance from the snapshot — prevents
-    // chasing a price that moved against us during the confirmation window
-    const snapshotAsk = this.entryAskSnapshots.get(market.ticker) ?? market.yesAsk;
-    if (market.yesAsk - snapshotAsk > ENTRY_PRICE_DRIFT_TOLERANCE) {
-      this.highAskCounts.delete(market.ticker);
-      this.entryAskSnapshots.delete(market.ticker);
-      return {
-        action: 'hold',
-        reason: `Ask drifted ${((market.yesAsk - snapshotAsk) * 100).toFixed(0)}¢ from snapshot ${(snapshotAsk * 100).toFixed(0)}¢ — resetting confirmation`,
-        market,
-      };
-    }
-
-    const count = prevCount + 1;
-    this.highAskCounts.set(market.ticker, count);
-
-    if (count < ENTRY_CONFIRMATION_TICKS) {
-      return {
-        action: 'hold',
-        reason: `Ask ${(market.yesAsk * 100).toFixed(0)}¢ above threshold — confirming entry (${count}/${ENTRY_CONFIRMATION_TICKS})`,
-        market,
-      };
-    }
-
-    // Entry range check
-    if (market.yesAsk <= ENTRY_PROBABILITY_THRESHOLD) {
-      return {
-        action: 'hold',
-        reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ at or below entry threshold ${ENTRY_PROBABILITY_THRESHOLD * 100}¢`,
         market,
       };
     }
@@ -182,7 +127,7 @@ export class TradingStrategy {
 
     return {
       action: 'buy',
-      reason: `ask=${(market.yesAsk * 100).toFixed(0)}¢ confirmed ${ENTRY_CONFIRMATION_TICKS} ticks | risking $${spendDollars} (${balancePct}% of balance)`,
+      reason: `ask=${(market.yesAsk * 100).toFixed(0)}¢ | risking $${spendDollars} (${balancePct}% of balance)`,
       market,
       suggestedContracts: contracts,
       suggestedLimitPrice: market.yesAsk,

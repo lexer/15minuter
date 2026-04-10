@@ -302,12 +302,10 @@ export class TradingAgent {
         console.log(
           `[Agent] ENTRY ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}% | ${signal.suggestedContracts} contracts @ $${signal.suggestedLimitPrice?.toFixed(2)}`,
         );
-        this.strategy.clearEntryConfirmation(market.ticker);
         const fill = await this.executeEntry(market, signal.suggestedContracts!, signal.suggestedLimitPrice!);
         if (fill === undefined || fill.filledCount === 0) {
-          // Buy failed/unfilled — apply cooldown so confirmation doesn't immediately re-trigger
+          // Buy failed/unfilled — apply cooldown to prevent hammering on consecutive ticks
           this.entryCooldowns.set(market.ticker, Date.now() + TradingAgent.ENTRY_COOLDOWN_MS);
-          this.strategy.clearEntryConfirmation(market.ticker);
         } else {
           this.entryCooldowns.delete(market.ticker);
         }

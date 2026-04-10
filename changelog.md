@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.24.0] — 2026-04-10
+
+### Changed
+- `TradingStrategy.evaluateEntry()`: removed 3-consecutive-tick confirmation window — agent now buys immediately on the first tick where ask > 90¢. IOC order semantics make the window redundant (a momentary spike with no liquidity just results in an unfilled order). Eliminates 2s of pre-entry latency.
+- Removed `ENTRY_CONFIRMATION_TICKS`, `ENTRY_PRICE_DRIFT_TOLERANCE`, `highAskCounts`, `entryAskSnapshots`, and `clearEntryConfirmation()` — all dead code after this change.
+- `TradingAgent`: removed `clearEntryConfirmation()` calls; cooldown after failed fill still applies.
+- Tests: rewrote entry tests for single-tick semantics (76 passing, down from 80 — 4 confirmation-window tests removed).
+
 ## [1.23.0] — 2026-04-10
 
 ### Changed
