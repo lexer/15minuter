@@ -1,5 +1,6 @@
 import { KalshiClient } from '../api/KalshiClient';
 import { KalshiMarket } from '../api/types';
+import { WsTickerMessage } from '../api/KalshiWebSocket';
 import { GameMonitor, NbaGameState } from './GameMonitor';
 import { WinProbabilityModel } from './WinProbabilityModel';
 
@@ -35,10 +36,11 @@ const KALSHI_TO_NBA: Record<string, string> = {
 const BLEND_MARKET_WEIGHT = 0.3;
 
 export class MarketService {
-  private readonly winModel = new WinProbabilityModel();
+  private readonly winModel  = new WinProbabilityModel();
+  private readonly cache     = new Map<string, BasketballMarket>();
 
   constructor(
-    private readonly client: KalshiClient,
+    private readonly client:      KalshiClient,
     private readonly gameMonitor: GameMonitor,
   ) {}
 
@@ -69,7 +71,10 @@ export class MarketService {
       }),
     );
 
-    return results.filter((m): m is BasketballMarket => m !== null);
+    const markets = results.filter((m): m is BasketballMarket => m !== null);
+    // Keep cache in sync so WS-based paths have a starting state
+    for (const m of markets) this.cache.set(m.ticker, m);
+    return markets;
   }
 
   /** Fetches all pages of open KXNBAGAME markets. */
@@ -92,6 +97,131 @@ export class MarketService {
   /** Returns only markets where the game is in Q4 or later. */
   async getLiveBasketballMarkets(): Promise<BasketballMarket[]> {
     return (await this.getAllLiveBasketballMarkets()).filter((m) => m.isQ4);
+  }
+
+  // ── Cache-based API (used by event-driven agent) ──────────────────────────
+
+  /** All currently cached markets. */
+  getCachedMarkets(): BasketballMarket[] {
+    return [...this.cache.values()];
+  }
+
+  /** Cached markets where the game is in Q4 or later. */
+  getCachedQ4Markets(): BasketballMarket[] {
+    return [...this.cache.values()].filter((m) => m.isQ4);
+  }
+
+  /**
+   * Apply a real-time WS ticker update to the cache.
+   * Updates bid/ask and recomputes blended win probability.
+   * Returns the updated market, or null if the ticker is not in cache.
+   */
+  applyTickerUpdate(msg: WsTickerMessage): BasketballMarket | null {
+    const market = this.cache.get(msg.market_ticker);
+    if (!market) return null;
+
+    const yesBid    = msg.yes_bid_dollars ?? market.yesBid;
+    const yesAsk    = msg.yes_ask_dollars ?? market.yesAsk;
+    const lastPrice = msg.price_dollars   ?? market.lastPrice;
+
+    let winProbability = market.winProbability;
+    if (market.gameState) {
+      const codes    = this.extractTeamCodes(market.eventTicker);
+      const teamCode = this.extractMarketTeamCode(market.ticker);
+      if (codes) {
+        winProbability = this.modelWinProbability(
+          market.gameState, codes, teamCode, yesBid, yesAsk,
+        ) ?? winProbability;
+      }
+    }
+
+    const updated: BasketballMarket = { ...market, yesBid, yesAsk, lastPrice, winProbability };
+    this.cache.set(msg.market_ticker, updated);
+    return updated;
+  }
+
+  /**
+   * Re-fetch NBA game states and update every cached market's game state +
+   * win probability. Call periodically (every 5 s).
+   */
+  async refreshGameStates(): Promise<void> {
+    await Promise.all([...this.cache.values()].map(async (market) => {
+      const codes = this.extractTeamCodes(market.eventTicker);
+      if (!codes) return;
+
+      const gameState = await this.gameMonitor.getGameState(
+        KALSHI_TO_NBA[codes.team1] ?? codes.team1,
+        KALSHI_TO_NBA[codes.team2] ?? codes.team2,
+      );
+
+      const teamCode         = this.extractMarketTeamCode(market.ticker);
+      let winProbability     = market.winProbability;
+      let isQ4               = market.isQ4;
+
+      if (gameState) {
+        winProbability = this.modelWinProbability(
+          gameState, codes, teamCode, market.yesBid, market.yesAsk,
+        ) ?? winProbability;
+        isQ4 = gameState.isQ4OrLater;
+      }
+
+      this.cache.set(market.ticker, {
+        ...market,
+        gameState: gameState ?? undefined,
+        winProbability,
+        isQ4,
+      });
+    }));
+  }
+
+  /**
+   * REST-based market discovery. Fetches all open KXNBAGAME markets, updates
+   * the cache, and returns which tickers are new vs removed.
+   */
+  async discoverMarkets(): Promise<{ newTickers: string[]; removedTickers: string[] }> {
+    const rawMarkets  = await this.fetchAllMarkets();
+    const freshSet    = new Set<string>();
+    const newTickers: string[] = [];
+
+    await Promise.all(rawMarkets.map(async (m) => {
+      freshSet.add(m.ticker);
+      const parsed = this.parseMarket(m);
+      if (!parsed) return;
+
+      const codes = this.extractTeamCodes(m.event_ticker ?? '');
+      if (codes) {
+        const gameState = await this.gameMonitor.getGameState(
+          KALSHI_TO_NBA[codes.team1] ?? codes.team1,
+          KALSHI_TO_NBA[codes.team2] ?? codes.team2,
+        );
+        parsed.gameState = gameState ?? undefined;
+        if (gameState) {
+          const teamCode     = this.extractMarketTeamCode(m.ticker);
+          parsed.winProbability = this.modelWinProbability(
+            gameState, codes, teamCode, parsed.yesBid, parsed.yesAsk,
+          ) ?? parsed.winProbability;
+          parsed.isQ4 = gameState.isQ4OrLater;
+        }
+      }
+
+      if (!this.cache.has(m.ticker)) newTickers.push(m.ticker);
+      // Preserve live bid/ask from WS if already cached; REST snapshot may be stale
+      const existing = this.cache.get(m.ticker);
+      this.cache.set(m.ticker, existing
+        ? { ...parsed, yesBid: existing.yesBid, yesAsk: existing.yesAsk }
+        : parsed,
+      );
+    }));
+
+    const removedTickers: string[] = [];
+    for (const ticker of this.cache.keys()) {
+      if (!freshSet.has(ticker)) {
+        this.cache.delete(ticker);
+        removedTickers.push(ticker);
+      }
+    }
+
+    return { newTickers, removedTickers };
   }
 
   async getMarket(ticker: string): Promise<BasketballMarket> {

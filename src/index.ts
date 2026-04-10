@@ -90,7 +90,9 @@ function cleanup(): void {
 
 process.on('exit', cleanup);
 
+import * as crypto from 'crypto';
 import { KalshiClient } from './api/KalshiClient';
+import { KalshiWebSocket } from './api/KalshiWebSocket';
 import { MarketService } from './services/MarketService';
 import { OrderService } from './services/OrderService';
 import { PortfolioService } from './services/PortfolioService';
@@ -106,8 +108,11 @@ function main(): void {
   }
 
   const privateKeyPath = path.resolve(process.cwd(), 'private_key.pem');
+  const privateKeyPem = fs.readFileSync(privateKeyPath, 'utf-8');
+  const privateKey = crypto.createPrivateKey(privateKeyPem);
 
   const client = new KalshiClient(keyId, privateKeyPath);
+  const ws = new KalshiWebSocket(keyId, privateKey);
   const gameMonitor = new GameMonitor();
   const marketService = new MarketService(client, gameMonitor);
   const orderService = new OrderService(client);
@@ -116,6 +121,7 @@ function main(): void {
   const history = new TradeHistory();
 
   const agent = new TradingAgent(
+    ws,
     marketService,
     orderService,
     portfolioService,

@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.25.0] — 2026-04-10
+
+### Changed
+- **WebSocket integration**: replaced 1-second REST polling loop with event-driven architecture
+  - `KalshiWebSocket` (new): single multiplexed connection to `wss://api.elections.kalshi.com/trade-api/ws/v2`; subscribes to `ticker`, `fill`, and `market_positions` channels. RSA-PSS auth headers on WS handshake (signs `{ts}GET/trade-api/ws/v2`). Exponential backoff reconnection (1s → 30s); resubscribes all tracked tickers on reconnect.
+  - `MarketService`: added in-memory market cache; `applyTickerUpdate()` applies real-time WS bid/ask and recomputes blended win probability without a REST call; `refreshGameStates()` updates all cached markets' game states from NBA CDN (called every 5s); `discoverMarkets()` handles REST-based market discovery.
+  - `TradingAgent`: rewritten as event-driven. `onTicker()` triggers strategy evaluation on every bid/ask update; `onFill()` optimistically adjusts cached balance; `onMarketPosition()` logs live position changes. Periodic setInterval loops: game state refresh (5s), market discovery (30s), balance correction (10s), reconciliation (15s).
+  - Removed `src/scripts/tick.ts` — obsolete single-shot script from old cron-based architecture.
+  - Removed `tick` npm script from `package.json`.
+
 ## [1.24.0] — 2026-04-10
 
 ### Changed

@@ -11,21 +11,22 @@
 ```
 src/
   api/
-    KalshiClient.ts        — RSA-PSS authenticated HTTP client for Kalshi API
+    KalshiClient.ts        — RSA-PSS authenticated HTTP client for Kalshi REST API
+    KalshiWebSocket.ts     — Single multiplexed WS connection (ticker + fill + market_positions)
     types.ts               — All Kalshi API request/response types
   services/
-    MarketService.ts       — Discovers and parses basketball game-winner markets; computes blended win probability
+    MarketService.ts       — Discovers and parses basketball game-winner markets; computes blended win probability; maintains in-memory market cache updated by WS
     GameMonitor.ts         — Polls NBA Live Data CDN for scores, clocks, and timeouts
     WinProbabilityModel.ts — Gaussian random-walk win probability (Clauset 2015) with timeout adjustment
-    OrderService.ts        — Places and cancels limit orders
+    OrderService.ts        — Places limit orders (IOC)
     PortfolioService.ts    — Reads balance and open positions
   strategy/
-    TradingStrategy.ts     — Entry/exit signal logic with confirmation windows; Kelly position sizing
+    TradingStrategy.ts     — Entry/exit signal logic; Kelly position sizing
   storage/
     TradeHistory.ts        — Persists trade records to trade_history.json
     AnalysisLogger.ts      — Writes per-tick JSON-lines analysis log (PST-dated)
   agent/
-    TradingAgent.ts        — Main polling loop; orchestrates all components
+    TradingAgent.ts        — Event-driven agent; orchestrates all components via WS events + setInterval loops
   index.ts                 — Entry point; wires dependencies; redirects stdout to PST-dated agent log
 ```
 
@@ -35,6 +36,8 @@ src/
 
 ### 1. RSA-PSS Authentication
 Kalshi's trade API requires RSA-PSS signatures on every authenticated request. The message is `{timestamp_ms}{METHOD}{/trade-api/v2/path}` (no query string in signed path). `KALSHI_API_KEY` holds the key UUID; the private key lives in `private_key.pem` (never committed).
+
+The same RSA-PSS scheme applies to WebSocket connections: sign `{timestamp_ms}GET/trade-api/ws/v2` and pass the three headers (`KALSHI-ACCESS-KEY`, `KALSHI-ACCESS-SIGNATURE`, `KALSHI-ACCESS-TIMESTAMP`) in the WebSocket upgrade request.
 
 ### 2. Price Representation
 Kalshi prices are integers 0–100 (cents). All internal prices are normalized to 0.0–1.0 floats immediately on parsing.
@@ -104,23 +107,37 @@ All services accept dependencies through the constructor for unit-testable compo
 ## Trade Lifecycle
 
 ```
-[every 1s]
-Promise.all([
-  balance refresh (every 5s),
-  getLiveGames(),
-  getAllLiveBasketballMarkets()   ← per-market game state fetches also parallelised
-])
-  ↓
-manage open positions (reuses tick's market map — no extra API calls):
-  market settled?    → record settlement at 1.0 or 0.0
-  market inactive?   → await settlement
-  bid ≤ 80¢ + prob < 85% for 3 ticks → sell at bid
-  ↓
-scan Q4 markets for entries:
-  ask > 90¢, ≤ 5 min left → buy immediately at ask (IOC)
-  size = 25% × (cash + deployed), capped at cash
-  ↓
-write analysis tick to analysis_YYYY-MM-DD.log
+[on start]
+REST: getAllLiveBasketballMarkets() + getBalance() in parallel
+WS: connect to wss://api.elections.kalshi.com/trade-api/ws/v2
+WS: subscribe to fill, market_positions, and all discovered tickers
+
+[on WS ticker message]  ← real-time bid/ask, no polling latency
+  applyTickerUpdate() → recompute blended win prob
+  if Q4 market: handleMarket()
+    open position? → managePosition() (exit check + top-up)
+    no position?   → scanEntry()
+
+[every 5s — gameStateLoop]
+  REST: refreshGameStates() (NBA CDN)
+  for each Q4 market: handleMarket()
+  write analysis tick to analysis_YYYY-MM-DD.log
+
+[every 30s — marketDiscoveryLoop]
+  REST: discoverMarkets() → WS subscribe/unsubscribe new/removed tickers
+
+[every 10s — balanceRefreshLoop]
+  REST: getBalance() to correct WS-optimistic drift
+
+[every 15s — reconcileLoop]
+  REST: getPortfolio() + getOpenOrders()
+  adopt external positions; detect external closes
+
+[on WS fill message]
+  optimistically adjust cachedBalanceCents
+
+[on WS market_position message]
+  log position update
 ```
 
 ---
