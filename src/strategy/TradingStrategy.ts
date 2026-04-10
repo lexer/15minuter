@@ -4,6 +4,7 @@ import { WinProbabilityModel } from '../services/WinProbabilityModel';
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
 export const ENTRY_CONFIRMATION_THRESHOLD = 0.9;    // ask must exceed this for consecutive-tick confirmation (same as entry threshold)
 export const ENTRY_CONFIRMATION_TICKS = 3;          // consecutive ticks above threshold required before entry
+export const ENTRY_PRICE_DRIFT_TOLERANCE = 0.02;    // max ask drift (2¢) from snapshot tick before confirmation resets
 export const ENTRY_MAX_SECONDS = 600;               // only enter in final 10 minutes of game
 export const EXIT_PROBABILITY_THRESHOLD = 0.7;
 export const EXIT_PROBABILITY_GUARD = 0.85; // don't exit on bid dip if model prob is above this
@@ -26,6 +27,7 @@ export interface TradeSignal {
 
 export class TradingStrategy {
   private readonly highAskCounts = new Map<string, number>(); // entry confirmation
+  private readonly entryAskSnapshots = new Map<string, number>(); // ask price at first confirmation tick
   private readonly lowBidCounts = new Map<string, number>();  // exit confirmation
   private readonly previousBids = new Map<string, number>();  // emergency exit: track last bid per position
 
@@ -35,6 +37,7 @@ export class TradingStrategy {
 
   clearEntryConfirmation(ticker: string): void {
     this.highAskCounts.delete(ticker);
+    this.entryAskSnapshots.delete(ticker);
   }
 
   clearExitConfirmation(ticker: string): void {
@@ -121,7 +124,27 @@ export class TradingStrategy {
       };
     }
 
-    const count = (this.highAskCounts.get(market.ticker) ?? 0) + 1;
+    const prevCount = this.highAskCounts.get(market.ticker) ?? 0;
+
+    // Snapshot the ask price on the first confirmation tick
+    if (prevCount === 0) {
+      this.entryAskSnapshots.set(market.ticker, market.yesAsk);
+    }
+
+    // Reset if price has drifted more than tolerance from the snapshot — prevents
+    // chasing a price that moved against us during the confirmation window
+    const snapshotAsk = this.entryAskSnapshots.get(market.ticker) ?? market.yesAsk;
+    if (market.yesAsk - snapshotAsk > ENTRY_PRICE_DRIFT_TOLERANCE) {
+      this.highAskCounts.delete(market.ticker);
+      this.entryAskSnapshots.delete(market.ticker);
+      return {
+        action: 'hold',
+        reason: `Ask drifted ${((market.yesAsk - snapshotAsk) * 100).toFixed(0)}¢ from snapshot ${(snapshotAsk * 100).toFixed(0)}¢ — resetting confirmation`,
+        market,
+      };
+    }
+
+    const count = prevCount + 1;
     this.highAskCounts.set(market.ticker, count);
 
     if (count < ENTRY_CONFIRMATION_TICKS) {

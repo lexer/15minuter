@@ -63,7 +63,8 @@ export class TradingAgent {
     const openPositionsCostCents = Math.round(
       openTrades.reduce((sum, t) => sum + (isFinite(t.totalCost) ? t.totalCost : 0), 0) * 100,
     );
-    await this.manageOpenPositions(balanceCents, openPositionsCostCents);
+    const allMarketsMap = new Map(allMarkets.map((m) => [m.ticker, m]));
+    await this.manageOpenPositions(balanceCents, openPositionsCostCents, allMarketsMap);
     await this.scanForEntries(balanceCents, allMarkets.filter((m) => m.isQ4), openPositionsCostCents);
 
     const summary = this.history.getSummary();
@@ -187,7 +188,11 @@ export class TradingAgent {
     }
   }
 
-  private async manageOpenPositions(balanceCents: number, openPositionsCostCents: number): Promise<void> {
+  private async manageOpenPositions(
+    balanceCents: number,
+    openPositionsCostCents: number,
+    tickMarkets: Map<string, BasketballMarket>,
+  ): Promise<void> {
     const openTrades = this.history.getOpenTrades();
 
     // Track current market state for analysis logging
@@ -199,7 +204,9 @@ export class TradingAgent {
 
     for (const record of openTrades) {
       try {
-        const market = await this.markets.getMarket(record.ticker);
+        // Reuse already-fetched market data from this tick; fall back to a fresh fetch
+        // only for inactive/settling markets not included in the open-markets list
+        const market = tickMarkets.get(record.ticker) ?? await this.markets.getMarket(record.ticker);
         openMarkets.set(record.ticker, market);
 
         // Market settled — record outcome directly, no sell order needed
