@@ -22,6 +22,15 @@ export class TradingAgent {
   private readonly pendingEntries  = new Set<string>();         // prevent concurrent orders
   private readonly intervals: ReturnType<typeof setInterval>[] = [];
 
+  // ── Fill price tracking ──────────────────────────────────────────────────────
+  // WS fill messages may arrive before or after the REST order response.
+  // We accumulate fills by orderId, and once both the fill data and trade ID are
+  // known, correct the trade record from the submitted limit price to the actual
+  // weighted-average execution price.
+  private readonly fillAccumulator = new Map<string, { totalCost: number; filledContracts: number }>();
+  // orderId → { tradeId, limitPrice used when recording, expected fill count }
+  private readonly orderTradeMap   = new Map<string, { tradeId: string; limitPrice: number; filledContracts: number }>();
+
   constructor(
     private readonly ws:        KalshiWebSocket,
     private readonly markets:   MarketService,
@@ -95,6 +104,15 @@ export class TradingAgent {
       `[Agent] FILL ${msg.market_ticker} ${msg.action} ${msg.count_fp} @ $${msg.yes_price_dollars}` +
       ` | balance≈$${(this.cachedBalanceCents / 100).toFixed(2)}`,
     );
+
+    // Accumulate buy fills for actual price correction
+    if (msg.action === 'buy') {
+      const acc = this.fillAccumulator.get(msg.order_id) ?? { totalCost: 0, filledContracts: 0 };
+      acc.totalCost      += price * count;
+      acc.filledContracts += count;
+      this.fillAccumulator.set(msg.order_id, acc);
+      this.applyFillPrice(msg.order_id);
+    }
   }
 
   private onMarketPosition(msg: WsMarketPositionMessage): void {
@@ -103,6 +121,19 @@ export class TradingAgent {
       `[Agent] POSITION ${msg.market_ticker} = ${contracts} contracts` +
       ` | cost=$${msg.position_cost_dollars} | pnl=$${msg.realized_pnl_dollars}`,
     );
+
+    // Position dropped to zero — mark our open trade as externally closed immediately
+    if (contracts === 0) {
+      const openTrade = this.history.getOpenTrades().find((t) => t.ticker === msg.market_ticker);
+      if (openTrade) {
+        console.log(`[Agent] POSITION CLOSED (WS) ${msg.market_ticker} — marking trade closed`);
+        this.history.updateTrade(openTrade.id, {
+          exitTime: new Date().toISOString(),
+          exitReason: 'manual',
+          pnl: parseFloat(msg.realized_pnl_dollars),
+        });
+      }
+    }
   }
 
   // ── Periodic background loops ────────────────────────────────────────────────
@@ -242,14 +273,13 @@ export class TradingAgent {
       );
       if (topUp.contracts > 0) {
         console.log(`[Agent] TOP-UP ${market.ticker}: ${topUp.reason}`);
-        const topUpMid = Math.floor((market.yesBid + market.yesAsk) / 2 * 100) / 100;
-        const fill = await this.executeTopUp(record, market, topUp.contracts, topUpMid);
+        const fill = await this.executeTopUp(record, market, topUp.contracts, market.yesAsk);
         this.analysis.logDecision({
           type: 'entry', ticker: market.ticker, reason: `Top-up: ${topUp.reason}`,
           contracts: topUp.contracts, filledContracts: fill?.filledCount,
           fillStatus: fill === undefined || fill.filledCount === 0 ? 'unfilled'
             : fill.filledCount >= topUp.contracts ? 'filled' : 'partial',
-          price: topUpMid, orderId: fill?.orderId,
+          price: market.yesAsk, orderId: fill?.orderId,
         });
       }
     }
@@ -310,12 +340,15 @@ export class TradingAgent {
         side: 'yes',
         action: 'buy',
         contracts: order.filledCount,
-        pricePerContract: limitPrice,
+        pricePerContract: limitPrice,           // overwritten by WS fill price if available
         totalCost: order.filledCount * limitPrice,
         winProbabilityAtEntry: market.winProbability,
         entryTime: new Date().toISOString(),
       };
       this.history.recordTrade(record);
+      // Register for WS fill price correction (fills may arrive before or after this)
+      this.orderTradeMap.set(order.orderId, { tradeId: record.id, limitPrice, filledContracts: order.filledCount });
+      this.applyFillPrice(order.orderId);
       console.log(`[Agent] Bought ${order.filledCount} YES on ${market.ticker} @ $${limitPrice.toFixed(2)} | orderId=${order.orderId}`);
       return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
@@ -335,7 +368,8 @@ export class TradingAgent {
         console.log(`[Agent] Top-up ${order.orderId} unfilled`);
         return { orderId: order.orderId, filledCount: 0 };
       }
-      const addedCost   = order.filledCount * limitPrice;
+      // Update contract count and cost at limit price; applyFillPrice will correct the cost
+      const addedCost    = order.filledCount * limitPrice;
       const newContracts = record.contracts + order.filledCount;
       const newAvgPrice  = (record.totalCost + addedCost) / newContracts;
       this.history.updateTrade(record.id, {
@@ -343,7 +377,9 @@ export class TradingAgent {
         pricePerContract: newAvgPrice,
         totalCost: record.totalCost + addedCost,
       });
-      console.log(`[Agent] TOP-UP filled ${order.filledCount}/${contracts} on ${record.ticker} @ $${limitPrice.toFixed(2)} | total=${newContracts} avg=$${newAvgPrice.toFixed(2)} | orderId=${order.orderId}`);
+      this.orderTradeMap.set(order.orderId, { tradeId: record.id, limitPrice, filledContracts: order.filledCount });
+      this.applyFillPrice(order.orderId);
+      console.log(`[Agent] TOP-UP filled ${order.filledCount}/${contracts} on ${record.ticker} @ $${limitPrice.toFixed(2)} | total=${newContracts} | orderId=${order.orderId}`);
       return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
       console.error(`[Agent] Failed to top-up ${record.ticker}:`, err);
@@ -442,6 +478,43 @@ export class TradingAgent {
     } catch (err) {
       console.error('[Agent] Reconciliation error:', err);
     }
+  }
+
+  // ── Fill price reconciliation ────────────────────────────────────────────────
+
+  /**
+   * Correct a trade record's cost from the submitted limit price to the actual
+   * weighted-average execution price using accumulated WS fill data.
+   *
+   * Called both when a fill arrives AND when a trade is registered, so it handles
+   * either ordering. Waits until accumulated fills cover all expected contracts.
+   */
+  private applyFillPrice(orderId: string): void {
+    const pending = this.orderTradeMap.get(orderId);
+    const acc     = this.fillAccumulator.get(orderId);
+    if (!pending || !acc) return;
+    // Wait until WS fills account for all expected contracts (IOC may sweep multiple levels)
+    if (acc.filledContracts < pending.filledContracts - 0.001) return;
+
+    const trade = this.history.getAllTrades().find((t) => t.id === pending.tradeId);
+    if (!trade) return;
+
+    // Replace the limit-price portion with actual fill cost:
+    //   correctedTotal = existingTotal - (limitPrice × filledContracts) + actualFillCost
+    const correctedTotal = trade.totalCost - (pending.limitPrice * pending.filledContracts) + acc.totalCost;
+    const correctedAvg   = correctedTotal / trade.contracts;
+
+    if (Math.abs(correctedTotal - trade.totalCost) > 0.0001) {
+      this.history.updateTrade(pending.tradeId, {
+        pricePerContract: correctedAvg,
+        totalCost: correctedTotal,
+      });
+      const actualAvg = acc.totalCost / acc.filledContracts;
+      console.log(`[Agent] FILL PRICE corrected ${trade.ticker}: limit=$${pending.limitPrice.toFixed(4)} actual=$${actualAvg.toFixed(4)}`);
+    }
+
+    this.fillAccumulator.delete(orderId);
+    this.orderTradeMap.delete(orderId);
   }
 
   // ── Utilities ────────────────────────────────────────────────────────────────

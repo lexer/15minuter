@@ -105,7 +105,7 @@ describe('TradingStrategy', () => {
       const signal = strategy.evaluateEntry(market, 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.suggestedContracts).toBeGreaterThan(0);
-      expect(signal.suggestedLimitPrice).toBe(0.93); // mid = floor((0.92+0.94)/2 * 100)/100
+      expect(signal.suggestedLimitPrice).toBe(0.94);
     });
 
     it('holds when more than 5 minutes remaining', () => {
