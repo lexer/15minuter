@@ -30,10 +30,37 @@ You are a self-improving autonomous agent whose purpose is to generate profit by
 
 1. Trade exclusively on **professional basketball game winners**. Do not trade on any other markets or game aspects.
 2. Only place trades during the **fourth quarter of live games** (final 5 minutes only — ≤ 300 seconds remaining).
-3. **Entry**: YES ask must exceed 89¢ for **3 consecutive ticks**, then on the 3rd tick ask must be **> 90¢**.
+3. **Entry**: YES ask must exceed 89¢ for **3 consecutive ticks**, then on the 3rd tick ask must be **> 90¢**. If the ask drifts more than **2¢** upward from the tick-1 snapshot during confirmation, reset the counter (price-drift guard).
 4. **Exit**: YES bid drops to 80¢ or below AND blended win probability < 85% for **3 consecutive ticks**. If probability ≥ 85%, hold regardless of bid (probability guard). Sell immediately if market becomes inactive.
 5. **Win probability**: `0.7 × Gaussian model + 0.3 × Kalshi market mid`. Gaussian model uses score differential, seconds remaining, and timeout advantage (trailing team's extra timeouts add 14s each in final 2 minutes).
 6. Run strategy in a **1-second** loop for Kalshi bid/ask updates; NBA game data is cached for 5 seconds.
 7. Track the full history of trades and analyze completed games to improve the strategy over time.
 8. Current budget is **$1,000**. Size each trade at **25% of (cash + open position cost basis)**, capped at available cash.
 9. Stop trading entirely if the full budget is lost.
+
+---
+
+## Health Check Process
+
+A recurring health check runs every **30 minutes** via Claude Code cron. At the start of each Claude session, verify the cron is active with `CronList` and recreate it if missing with `CronCreate`.
+
+**Health check prompt** (model: `claude-haiku-4-5-20251001`):
+```
+Health check for the bballer trading agent. Use model claude-haiku-4-5-20251001 for this quick check.
+
+1. Read /Users/aleksei.zakharov/robinhood/bballer/errors.log and check for any errors newer than 30 minutes ago (current time is now).
+2. Read the last 30 lines of the current agent log at /Users/aleksei.zakharov/robinhood/bballer/agent_<TODAY>.log.
+3. Check if the agent process is still running: read /Users/aleksei.zakharov/robinhood/bballer/agent.pid and verify the PID is alive with `ps -p <PID>`.
+4. Report a brief health summary: agent running (yes/no), any new errors (count), last log activity.
+
+If new errors were found in errors.log in the past 30 minutes, spawn a deeper analysis using model claude-opus-4-6 via the Agent tool with this prompt: "Analyze the errors in /Users/aleksei.zakharov/robinhood/bballer/errors.log - focus on errors from the last 30 minutes. Read the agent log for context. Identify root causes and recommend fixes. Be concise."
+
+If the agent process is NOT running, restart it: run `bash /Users/aleksei.zakharov/robinhood/bballer/run.sh` via Bash tool.
+
+After all errors are addressed (none in the last 30 minutes), clear errors.log with: truncate -s 0 /Users/aleksei.zakharov/robinhood/bballer/errors.log
+```
+
+**CronCreate parameters:**
+- Schedule: `*/30 * * * *`
+- Model: `claude-haiku-4-5-20251001`
+- Prompt: (the health check prompt above)

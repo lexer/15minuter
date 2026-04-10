@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.23.0] — 2026-04-10
+
+### Changed
+- `MarketService.getAllLiveBasketballMarkets()`: replaced sequential `for...of` game-state fetches with `Promise.all()` — all per-market `getGameState()` calls now fire concurrently
+- `TradingAgent.tick()`: balance refresh, `getLiveGames()`, and `getAllLiveBasketballMarkets()` now run in a single `Promise.all()` instead of three sequential awaits, minimising latency before entry/exit evaluation
+
+## [1.22.0] — 2026-04-10
+
+### Fixed
+- `TradingStrategy.evaluateEntry()`: added `ENTRY_PRICE_DRIFT_TOLERANCE = 0.02` (2¢) — if the ask rises more than 2¢ from its tick-1 snapshot during the 3-tick confirmation window, the counter resets. Prevents entering at a price that moved against us while confirming.
+- `TradingAgent.manageOpenPositions()`: now receives the tick's `allMarkets` map and reuses already-fetched market data for open positions instead of issuing a redundant `getMarket()` API call per position each tick. Falls back to a fresh fetch only for markets not present in the map (e.g. settling/inactive).
+
 ## [1.21.0] — 2026-04-06
 
 ### Changed

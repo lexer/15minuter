@@ -57,7 +57,8 @@ The 70/30 blend was calibrated via backtest on 2026-04-06 game data: it exits lo
 3. ≤ 300 seconds remaining (final 5 minutes only)
 4. YES ask > 89¢ for **3 consecutive ticks** (confirmation window)
 5. On the 3rd tick: ask must be **> 90¢** (entry threshold)
-6. Size: `25% × (cash + open position cost basis)`, capped at available cash
+6. Ask must not have drifted more than **2¢** upward from the tick-1 snapshot during the confirmation window — if it has, the counter resets (prevents chasing a price that moved against us while confirming)
+7. Size: `25% × (cash + open position cost basis)`, capped at available cash
 
 ### 5. Exit Criteria
 1. Market inactive/closed → sell immediately at bid
@@ -104,15 +105,20 @@ All services accept dependencies through the constructor for unit-testable compo
 
 ```
 [every 1s]
-fetch NBA game states (cached 5s) + Kalshi markets
+Promise.all([
+  balance refresh (every 5s),
+  getLiveGames(),
+  getAllLiveBasketballMarkets()   ← per-market game state fetches also parallelised
+])
   ↓
-manage open positions:
+manage open positions (reuses tick's market map — no extra API calls):
   market settled?    → record settlement at 1.0 or 0.0
   market inactive?   → await settlement
   bid ≤ 80¢ + prob < 85% for 3 ticks → sell at bid
   ↓
 scan Q4 markets for entries:
   ask > 89¢ for 3 ticks, ask > 90¢, ≤ 5 min left → buy at ask
+  ask drift > 2¢ from tick-1 snapshot → reset confirmation counter
   size = 25% × (cash + deployed), capped at cash
   ↓
 write analysis tick to analysis_YYYY-MM-DD.log
