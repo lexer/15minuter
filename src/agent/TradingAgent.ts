@@ -33,10 +33,20 @@ export class TradingAgent {
 
   async tick(): Promise<void> {
     const now = Date.now();
-    if (now - this.lastBalanceFetch >= BALANCE_REFRESH_MS) {
-      this.cachedBalanceCents = await this.portfolio.getBalance();
+    const needsBalanceRefresh = now - this.lastBalanceFetch >= BALANCE_REFRESH_MS;
+
+    // Fire all independent pre-trade fetches in parallel
+    const [freshBalance, allGames, allMarkets] = await Promise.all([
+      needsBalanceRefresh ? this.portfolio.getBalance() : Promise.resolve(this.cachedBalanceCents),
+      this.gameMonitor.getLiveGames(),
+      this.markets.getAllLiveBasketballMarkets(),
+    ]);
+
+    if (needsBalanceRefresh) {
+      this.cachedBalanceCents = freshBalance;
       this.lastBalanceFetch = now;
     }
+
     const balanceCents = this.cachedBalanceCents;
     this.analysis.startTick(balanceCents);
 
@@ -49,10 +59,7 @@ export class TradingAgent {
       console.log('[Agent] Budget exhausted — halting.');
       return;
     }
-
-    // Fetch games and markets together — logged as unified entries
-    const allGames = await this.gameMonitor.getLiveGames();
-    const allMarkets = await this.markets.getAllLiveBasketballMarkets();
+    // Log games and markets (already fetched above in parallel)
     this.analysis.logGames(allGames, allMarkets);
 
     this.tickCount++;

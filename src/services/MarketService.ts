@@ -45,30 +45,31 @@ export class MarketService {
   /** Returns all live KXNBAGAME markets regardless of quarter, with isQ4 flag set. */
   async getAllLiveBasketballMarkets(): Promise<BasketballMarket[]> {
     const rawMarkets = await this.fetchAllMarkets();
-    const markets: BasketballMarket[] = [];
 
-    for (const m of rawMarkets) {
-      const parsed = this.parseMarket(m);
-      if (!parsed) continue;
+    const results = await Promise.all(
+      rawMarkets.map(async (m) => {
+        const parsed = this.parseMarket(m);
+        if (!parsed) return null;
 
-      const codes = this.extractTeamCodes(m.event_ticker ?? '');
-      if (codes) {
-        const gameState = await this.gameMonitor.getGameState(
-          KALSHI_TO_NBA[codes.team1] ?? codes.team1,
-          KALSHI_TO_NBA[codes.team2] ?? codes.team2,
-        );
-        parsed.gameState = gameState ?? undefined;
-        if (gameState) {
-          const teamCode = this.extractMarketTeamCode(m.ticker);
-          parsed.winProbability = this.modelWinProbability(gameState, codes, teamCode, parsed.yesBid, parsed.yesAsk) ?? parsed.winProbability;
-          parsed.isQ4 = gameState.isQ4OrLater;
+        const codes = this.extractTeamCodes(m.event_ticker ?? '');
+        if (codes) {
+          const gameState = await this.gameMonitor.getGameState(
+            KALSHI_TO_NBA[codes.team1] ?? codes.team1,
+            KALSHI_TO_NBA[codes.team2] ?? codes.team2,
+          );
+          parsed.gameState = gameState ?? undefined;
+          if (gameState) {
+            const teamCode = this.extractMarketTeamCode(m.ticker);
+            parsed.winProbability = this.modelWinProbability(gameState, codes, teamCode, parsed.yesBid, parsed.yesAsk) ?? parsed.winProbability;
+            parsed.isQ4 = gameState.isQ4OrLater;
+          }
         }
-      }
 
-      markets.push(parsed);
-    }
+        return parsed;
+      }),
+    );
 
-    return markets;
+    return results.filter((m): m is BasketballMarket => m !== null);
   }
 
   /** Fetches all pages of open KXNBAGAME markets. */
