@@ -243,13 +243,14 @@ export class TradingAgent {
       );
       if (topUp.contracts > 0) {
         console.log(`[Agent] TOP-UP ${market.ticker}: ${topUp.reason}`);
-        const fill = await this.executeTopUp(record, market, topUp.contracts, market.yesAsk);
+        const topUpMid = Math.floor((market.yesBid + market.yesAsk) / 2 * 100) / 100;
+        const fill = await this.executeTopUp(record, market, topUp.contracts, topUpMid);
         this.analysis.logDecision({
           type: 'entry', ticker: market.ticker, reason: `Top-up: ${topUp.reason}`,
           contracts: topUp.contracts, filledContracts: fill?.filledCount,
           fillStatus: fill === undefined || fill.filledCount === 0 ? 'unfilled'
             : fill.filledCount >= topUp.contracts ? 'filled' : 'partial',
-          price: market.yesAsk, orderId: fill?.orderId,
+          price: topUpMid, orderId: fill?.orderId,
         });
       }
     }

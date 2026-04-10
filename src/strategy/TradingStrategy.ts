@@ -115,6 +115,8 @@ export class TradingStrategy {
       Math.floor(totalFundsCents * MAX_BALANCE_RISK_FRACTION),
       availableBalanceCents,
     );
+    // Size conservatively at ask price; post order at mid to improve fill price
+    const midPrice = Math.floor((market.yesBid + market.yesAsk) / 2 * 100) / 100;
     const costPerContractCents = Math.round(market.yesAsk * 100);
     const contracts = Math.floor(maxSpendCents / costPerContractCents);
 
@@ -122,15 +124,15 @@ export class TradingStrategy {
       return { action: 'hold', reason: 'Insufficient balance for even 1 contract', market };
     }
 
-    const spendDollars = (contracts * costPerContractCents / 100).toFixed(2);
-    const balancePct = (contracts * costPerContractCents / availableBalanceCents * 100).toFixed(1);
+    const spendDollars = (contracts * midPrice).toFixed(2);
+    const balancePct = (contracts * midPrice / (availableBalanceCents / 100) * 100).toFixed(1);
 
     return {
       action: 'buy',
-      reason: `ask=${(market.yesAsk * 100).toFixed(0)}¢ | risking $${spendDollars} (${balancePct}% of balance)`,
+      reason: `ask=${(market.yesAsk * 100).toFixed(0)}¢ mid=${(midPrice * 100).toFixed(0)}¢ | risking $${spendDollars} (${balancePct}% of balance)`,
       market,
       suggestedContracts: contracts,
-      suggestedLimitPrice: market.yesAsk,
+      suggestedLimitPrice: midPrice,
     };
   }
 
