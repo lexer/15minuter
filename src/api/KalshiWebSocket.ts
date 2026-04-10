@@ -8,6 +8,8 @@ const WS_PATH = '/trade-api/ws/v2';
 
 const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS     = 30_000;
+const PING_INTERVAL_MS     = 30_000;  // send ping every 30s
+const PONG_TIMEOUT_MS      = 10_000;  // force-reconnect if no pong within 10s
 
 // ── Message types ─────────────────────────────────────────────────────────────
 
@@ -60,8 +62,10 @@ export declare interface KalshiWebSocket {
 // ── Implementation ────────────────────────────────────────────────────────────
 
 export class KalshiWebSocket extends EventEmitter {
-  private socket:          WebSocket | null = null;
-  private reconnectDelay   = INITIAL_RECONNECT_MS;
+  private socket:           WebSocket | null = null;
+  private reconnectDelay    = INITIAL_RECONNECT_MS;
+  private pingTimer:        ReturnType<typeof setInterval> | null = null;
+  private pongTimer:        ReturnType<typeof setTimeout>  | null = null;
   private readonly subscribedTickers = new Set<string>();
   private cmdId   = 1;
   private running = false;
@@ -83,6 +87,7 @@ export class KalshiWebSocket extends EventEmitter {
 
   stop(): void {
     this.running = false;
+    this.clearHeartbeat();
     this.socket?.terminate();
     this.socket = null;
   }
@@ -115,6 +120,28 @@ export class KalshiWebSocket extends EventEmitter {
   }
 
   // ── Private helpers ─────────────────────────────────────────────────────────
+
+  private clearHeartbeat(): void {
+    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    if (this.pongTimer) { clearTimeout(this.pongTimer);  this.pongTimer = null; }
+  }
+
+  private startHeartbeat(ws: WebSocket): void {
+    this.clearHeartbeat();
+    this.pingTimer = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.ping();
+      // Expect a pong back within PONG_TIMEOUT_MS
+      this.pongTimer = setTimeout(() => {
+        console.error('[WS] Pong timeout — forcing reconnect');
+        ws.terminate();
+      }, PONG_TIMEOUT_MS);
+    }, PING_INTERVAL_MS);
+
+    ws.on('pong', () => {
+      if (this.pongTimer) { clearTimeout(this.pongTimer); this.pongTimer = null; }
+    });
+  }
 
   private sign(timestamp: number): string {
     const msg = `${timestamp}GET${WS_PATH}`;
@@ -151,6 +178,7 @@ export class KalshiWebSocket extends EventEmitter {
       ws.once('open', () => {
         console.log('[WS] Connected');
         this.reconnectDelay = INITIAL_RECONNECT_MS;
+        this.startHeartbeat(ws);
 
         // Subscribe to fill and market_positions channels immediately
         ws.send(JSON.stringify({ id: this.cmdId++, cmd: 'subscribe',
@@ -178,6 +206,7 @@ export class KalshiWebSocket extends EventEmitter {
       });
 
       ws.on('close', (code, reason) => {
+        this.clearHeartbeat();
         this.socket = null;
         console.log(`[WS] Disconnected (${code} ${reason?.toString() ?? ''})`);
         if (this.running) {

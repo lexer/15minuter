@@ -120,9 +120,10 @@ export class MarketService {
     const market = this.cache.get(msg.market_ticker);
     if (!market) return null;
 
-    const yesBid    = msg.yes_bid_dollars ?? market.yesBid;
-    const yesAsk    = msg.yes_ask_dollars ?? market.yesAsk;
-    const lastPrice = msg.price_dollars   ?? market.lastPrice;
+    // WS delivers price fields as strings; parse defensively
+    const yesBid    = msg.yes_bid_dollars !== undefined ? parseFloat(String(msg.yes_bid_dollars)) : market.yesBid;
+    const yesAsk    = msg.yes_ask_dollars !== undefined ? parseFloat(String(msg.yes_ask_dollars)) : market.yesAsk;
+    const lastPrice = msg.price_dollars   !== undefined ? parseFloat(String(msg.price_dollars))   : market.lastPrice;
 
     let winProbability = market.winProbability;
     if (market.gameState) {
