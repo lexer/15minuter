@@ -39,10 +39,15 @@ Kalshi's trade API requires RSA-PSS signatures on every authenticated request. T
 
 The same RSA-PSS scheme applies to WebSocket connections: sign `{timestamp_ms}GET/trade-api/ws/v2` and pass the three headers (`KALSHI-ACCESS-KEY`, `KALSHI-ACCESS-SIGNATURE`, `KALSHI-ACCESS-TIMESTAMP`) in the WebSocket upgrade request.
 
-### 2. Price Representation
+### 2. WebSocket Keep-Alive (Watchdog)
+Kalshi sends a WebSocket `ping` frame with body `"heartbeat"` every 10 seconds. The `ws` library automatically responds with a `pong` frame (RFC 6455). We do not send our own outgoing pings.
+
+Instead, a 45-second inactivity watchdog is reset on every inbound frame (both `message` and `ping` events). If nothing arrives for 45 seconds — meaning Kalshi's heartbeat missed ~4 consecutive beats — the socket is terminated and reconnected with fresh auth headers. This avoids false-positive reconnects from asymmetric network conditions that plagued the earlier outgoing-ping approach.
+
+### 3. Price Representation
 Kalshi prices are integers 0–100 (cents). All internal prices are normalized to 0.0–1.0 floats immediately on parsing.
 
-### 3. Win Probability — Blended Model
+### 4. Win Probability — Blended Model
 Win probability combines a Gaussian random-walk model with the Kalshi market mid-price:
 
 ```
@@ -54,7 +59,7 @@ The Gaussian model (Clauset 2015): `Φ(scoreDiff / (0.22 × √secondsLeft))` mo
 
 The 70/30 blend was calibrated via backtest on 2026-04-06 game data: it exits losing positions ~2 minutes earlier than the pure model with no false exits on winning positions.
 
-### 4. Entry Criteria
+### 5. Entry Criteria
 1. Market must be `active` or `open`
 2. Game state available from NBA Live Data
 3. ≤ 600 seconds remaining (final 10 minutes only)
@@ -63,30 +68,30 @@ The 70/30 blend was calibrated via backtest on 2026-04-06 game data: it exits lo
 
 No confirmation window: IOC order semantics make it redundant — a momentary ask spike with no real liquidity simply results in an unfilled order, not a bad fill. Removing the window eliminates 2s of latency and the need for a price-drift guard.
 
-### 5. Exit Criteria
+### 6. Exit Criteria
 1. Market inactive/closed → sell immediately at bid
 2. bid ≤ 80¢ AND blended winProbability ≥ 85% → hold (probability guard blocks exit)
 3. bid ≤ 80¢ AND blended winProbability < 85% → require **3 consecutive ticks**, then sell at bid
 4. bid > 80¢ → hold
 
-### 6. Position Sizing
+### 7. Position Sizing
 Size is `min(25% × startingDailyBudget, availableCash)`. The budget is fixed at the cash balance recorded at agent startup each day and does not change as positions are opened or settled. This prevents the compounding over-leverage that occurred on 2026-04-10 when using `cash + open positions` as the base, which allowed 6 concurrent positions to push total exposure to 3.4× the starting balance.
 
 The Kelly fraction is computed to confirm positive edge exists before entry, but sizing uses the flat 25% fraction regardless of Kelly magnitude.
 
 If a buy order is rejected with `insufficient_balance`, `cachedBalanceCents` is immediately zeroed so subsequent ticks skip entry rather than retrying every second.
 
-### 7. Market Discovery
+### 8. Market Discovery
 Basketball game-winner markets are discovered via the `KXNBAGAME` series ticker. Each event ticker encodes date and team codes (e.g. `KXNBAGAME-26APR06HOUGSW`). Team codes are mapped from Kalshi 3-letter codes to NBA tricodes via a static lookup table.
 
-### 8. NBA Live Data
+### 9. NBA Live Data
 Game state (score, clock, period, timeouts) is fetched from the NBA CDN every 5 seconds:
 - Scoreboard: `https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json`
 - Boxscore per game: `https://cdn.nba.com/static/json/liveData/boxscore/boxscore_{gameId}.json`
 
 Timeout counts are used to adjust effective seconds remaining in the final 2 minutes.
 
-### 9. Logging
+### 10. Logging
 Two PST-dated log files are written per game day:
 
 | File | Format | Content |
@@ -106,7 +111,7 @@ Analysis log compaction rules:
 ### PnL Tracking
 `TradeHistory` tracks `realizedPnl` (closed trades only). Each game-state tick also computes `unrealizedPnl` for open positions using the current `yesBid` price as the liquidation value: `Σ (yesBid − entryPrice) × contracts`. Both values are logged to the agent console and included in the analysis log tick summary as `realizedPnl`, `unrealizedPnl`, and `totalPnl`.
 
-### 10. Dependency Injection
+### 11. Dependency Injection
 All services accept dependencies through the constructor for unit-testable components. The live API integration test suite makes real Kalshi API requests to verify authentication and response shapes.
 
 ---
