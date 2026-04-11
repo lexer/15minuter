@@ -57,9 +57,9 @@ The 70/30 blend was calibrated via backtest on 2026-04-06 game data: it exits lo
 ### 4. Entry Criteria
 1. Market must be `active` or `open`
 2. Game state available from NBA Live Data
-3. ≤ 300 seconds remaining (final 5 minutes only)
+3. ≤ 600 seconds remaining (final 10 minutes only)
 4. YES ask **> 90¢** — buy immediately on the first qualifying tick
-5. Size: `25% × (cash + open position cost basis)`, capped at available cash
+5. Size: `25% × startingDailyBudget`, capped at available cash
 
 No confirmation window: IOC order semantics make it redundant — a momentary ask spike with no real liquidity simply results in an unfilled order, not a bad fill. Removing the window eliminates 2s of latency and the need for a price-drift guard.
 
@@ -70,7 +70,11 @@ No confirmation window: IOC order semantics make it redundant — a momentary as
 4. bid > 80¢ → hold
 
 ### 6. Position Sizing
-Size is `25% × totalFunds` where `totalFunds = cashBalance + openPositionCostBasis`, capped at available cash. This accounts for deployed capital when sizing new entries, preventing over-allocation when multiple positions are open simultaneously. The Kelly fraction is computed to confirm positive edge exists before entry, but sizing uses the flat 25% fraction regardless of Kelly magnitude.
+Size is `min(25% × startingDailyBudget, availableCash)`. The budget is fixed at the cash balance recorded at agent startup each day and does not change as positions are opened or settled. This prevents the compounding over-leverage that occurred on 2026-04-10 when using `cash + open positions` as the base, which allowed 6 concurrent positions to push total exposure to 3.4× the starting balance.
+
+The Kelly fraction is computed to confirm positive edge exists before entry, but sizing uses the flat 25% fraction regardless of Kelly magnitude.
+
+If a buy order is rejected with `insufficient_balance`, `cachedBalanceCents` is immediately zeroed so subsequent ticks skip entry rather than retrying every second.
 
 ### 7. Market Discovery
 Basketball game-winner markets are discovered via the `KXNBAGAME` series ticker. Each event ticker encodes date and team codes (e.g. `KXNBAGAME-26APR06HOUGSW`). Team codes are mapped from Kalshi 3-letter codes to NBA tricodes via a static lookup table.
@@ -98,6 +102,9 @@ Analysis log compaction rules:
 - `openPositions` array omitted when empty
 - Signal/reason fields skipped on blowout markets (ask ≤ 10¢ or ≥ 99¢)
 - Win probability rounded to 4 decimal places; PnL to 2dp
+
+### PnL Tracking
+`TradeHistory` tracks `realizedPnl` (closed trades only). Each game-state tick also computes `unrealizedPnl` for open positions using the current `yesBid` price as the liquidation value: `Σ (yesBid − entryPrice) × contracts`. Both values are logged to the agent console and included in the analysis log tick summary as `realizedPnl`, `unrealizedPnl`, and `totalPnl`.
 
 ### 10. Dependency Injection
 All services accept dependencies through the constructor for unit-testable components. The live API integration test suite makes real Kalshi API requests to verify authentication and response shapes.

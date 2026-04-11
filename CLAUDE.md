@@ -35,7 +35,7 @@ You are a self-improving autonomous agent whose purpose is to generate profit by
 5. **Win probability**: `0.7 × Gaussian model + 0.3 × Kalshi market mid`. Gaussian model uses score differential, seconds remaining, and timeout advantage (trailing team's extra timeouts add 14s each in final 2 minutes).
 6. Strategy is **event-driven via WebSocket**: single connection to `wss://api.elections.kalshi.com/trade-api/ws/v2`. Entry/exit evaluated on every WS ticker update for Q4 markets. WS fill channel corrects trade record prices to actual execution price. WS market_positions channel marks positions closed in real-time. NBA game data polled every 5s; market discovery every 30s; balance corrected every 10s; full reconciliation every 15s.
 7. Track the full history of trades and analyze completed games to improve the strategy over time.
-8. Current budget is **$1,000**. Size each trade at **25% of (cash + open position cost basis)**, capped at available cash.
+8. Current budget is **$1,000**. Size each trade at **25% of the starting daily budget** (balance at agent startup), capped at available cash. The budget base is fixed for the day — it does not grow as positions are opened.
 9. Stop trading entirely if the full budget is lost.
 
 ---
