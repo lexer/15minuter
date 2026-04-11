@@ -84,8 +84,14 @@ export class KalshiClient {
       const text = await response.text();
       lastError = new Error(`Kalshi API error ${response.status} on ${method} ${endpoint}: ${text}`);
 
-      // Don't retry client errors except 429 (rate limit)
-      if (response.status !== 429 && response.status < 500) {
+      // Retry 429 (rate limit), 401 with header_timestamp_expired (transient timestamp
+      // staleness from event-loop delays or network latency), and 5xx server errors.
+      // All other client errors are non-retryable.
+      const isRetryable =
+        response.status === 429 ||
+        response.status >= 500 ||
+        (response.status === 401 && text.includes('header_timestamp_expired'));
+      if (!isRetryable) {
         throw lastError;
       }
     }
