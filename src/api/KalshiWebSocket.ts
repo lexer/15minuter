@@ -70,8 +70,10 @@ export class KalshiWebSocket extends EventEmitter {
   private running = false;
 
   constructor(
-    private readonly keyId:      string,
-    private readonly privateKey: crypto.KeyObject,
+    private readonly keyId:       string,
+    private readonly privateKey:  crypto.KeyObject,
+    private readonly wsUrl:       string = WS_URL,
+    private readonly watchdogMs:  number = WATCHDOG_MS,
   ) {
     super();
   }
@@ -127,9 +129,9 @@ export class KalshiWebSocket extends EventEmitter {
   private resetWatchdog(ws: WebSocket): void {
     if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
     this.watchdogTimer = setTimeout(() => {
-      console.error(`[WS] Watchdog timeout — no activity for ${WATCHDOG_MS / 1000}s, forcing reconnect`);
+      console.error(`[WS] Watchdog timeout — no activity for ${this.watchdogMs / 1000}s, forcing reconnect`);
       ws.terminate();
-    }, WATCHDOG_MS);
+    }, this.watchdogMs);
   }
 
   private startHeartbeat(ws: WebSocket): void {
@@ -164,7 +166,7 @@ export class KalshiWebSocket extends EventEmitter {
 
   private openSocket(): Promise<void> {
     return new Promise((resolve) => {
-      const ws = new WebSocket(WS_URL, { headers: this.authHeaders() });
+      const ws = new WebSocket(this.wsUrl, { headers: this.authHeaders() });
       this.socket = ws;
 
       let resolved = false;

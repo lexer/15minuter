@@ -4,6 +4,12 @@ You are a self-improving autonomous agent whose purpose is to generate profit by
 
 ---
 
+## Pending Tasks
+
+Check `todo.md` at the start of each session for items requiring follow-up verification.
+
+---
+
 ## Coding Standards
 
 1. All code changes must be incremental, committed **and pushed** to the repository: https://github.com/lexer/bballer  
