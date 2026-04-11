@@ -15,10 +15,11 @@ const BALANCE_REFRESH_INTERVAL_MS  = 10_000; // REST: correct balance drift
 const RECONCILE_INTERVAL_MS        = 15_000; // REST: sanity-check positions
 
 export class TradingAgent {
-  private running              = false;
-  private readonly analysis    = new AnalysisLogger();
-  private cachedBalanceCents   = 0;
-  private lastLoggedBalance    = -1;
+  private running                  = false;
+  private readonly analysis        = new AnalysisLogger();
+  private cachedBalanceCents       = 0;
+  private startingDailyBudgetCents = 0;
+  private lastLoggedBalance        = -1;
   private readonly pendingEntries  = new Set<string>();         // prevent concurrent orders
   private readonly intervals: ReturnType<typeof setInterval>[] = [];
 
@@ -46,7 +47,7 @@ export class TradingAgent {
   async start(): Promise<void> {
     this.running = true;
     console.log('[Agent] Starting autonomous trading agent...');
-    this.logSummary(this.history.getSummary());
+    this.logSummary(this.history.getSummary(), 0);
 
     // Initial data fetch: market discovery + balance in parallel
     const [, balance] = await Promise.all([
@@ -54,6 +55,7 @@ export class TradingAgent {
       this.portfolio.getBalance(),
     ]);
     this.cachedBalanceCents = balance;
+    this.startingDailyBudgetCents = balance;
     this.logBalance();
 
     // Subscribe to all discovered tickers before connecting
@@ -161,11 +163,13 @@ export class TradingAgent {
         await this.handleMarket(market);
       }
 
-      this.logSummary(this.history.getSummary());
+      const currentOpenTrades = this.history.getOpenTrades();
+      const unrealizedPnl = this.computeUnrealizedPnl(currentOpenTrades);
+      this.logSummary(this.history.getSummary(), unrealizedPnl);
       const hasLive = allGames.length > 0;
-      const hasOpen = openTrades.length > 0;
+      const hasOpen = currentOpenTrades.length > 0;
       if (hasLive || hasOpen) {
-        this.analysis.finalizeTick(this.history.getSummary());
+        this.analysis.finalizeTick(this.history.getSummary(), unrealizedPnl);
       }
     } catch (err) {
       console.error('[Agent] gameStateLoop error:', err);
@@ -269,7 +273,7 @@ export class TradingAgent {
 
       // Top-up if position is below target
       const topUp = this.strategy.evaluateTopUp(
-        market, record.contracts, this.cachedBalanceCents, this.openPositionsCost(this.history.getOpenTrades()),
+        market, record.contracts, this.cachedBalanceCents, this.startingDailyBudgetCents,
       );
       if (topUp.contracts > 0) {
         console.log(`[Agent] TOP-UP ${market.ticker}: ${topUp.reason}`);
@@ -289,7 +293,7 @@ export class TradingAgent {
     // Skip if a concurrent order is already in flight for this ticker
     if (this.pendingEntries.has(market.ticker)) return;
 
-    const signal = this.strategy.evaluateEntry(market, this.cachedBalanceCents, openPositionsCostCents);
+    const signal = this.strategy.evaluateEntry(market, this.cachedBalanceCents, this.startingDailyBudgetCents);
     this.analysis.logMarketEval(market, signal);
 
     if (signal.action !== 'buy') {
@@ -353,6 +357,9 @@ export class TradingAgent {
       return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
       console.error(`[Agent] Failed to buy ${market.ticker}:`, err);
+      if (err instanceof Error && err.message.includes('insufficient_balance')) {
+        this.cachedBalanceCents = 0;
+      }
     }
   }
 
@@ -383,6 +390,9 @@ export class TradingAgent {
       return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
       console.error(`[Agent] Failed to top-up ${record.ticker}:`, err);
+      if (err instanceof Error && err.message.includes('insufficient_balance')) {
+        this.cachedBalanceCents = 0;
+      }
     }
   }
 
@@ -523,6 +533,15 @@ export class TradingAgent {
     return Math.round(trades.reduce((sum, t) => sum + (isFinite(t.totalCost) ? t.totalCost : 0), 0) * 100);
   }
 
+  private computeUnrealizedPnl(openTrades: TradeRecord[]): number {
+    const marketMap = new Map(this.markets.getCachedMarkets().map((m) => [m.ticker, m]));
+    return openTrades.reduce((sum, trade) => {
+      const market = marketMap.get(trade.ticker);
+      if (!market) return sum;
+      return sum + (market.yesBid - trade.pricePerContract) * trade.contracts;
+    }, 0);
+  }
+
   private logBalance(): void {
     if (this.cachedBalanceCents !== this.lastLoggedBalance) {
       console.log(`[Agent] ${new Date().toISOString()} | Balance: $${(this.cachedBalanceCents / 100).toFixed(2)}`);
@@ -530,7 +549,12 @@ export class TradingAgent {
     }
   }
 
-  private logSummary(s: { totalTrades: number; totalPnl: number; winRate: number }): void {
-    console.log(`[Agent] History: ${s.totalTrades} trades | PnL=$${s.totalPnl.toFixed(2)} | WinRate=${(s.winRate * 100).toFixed(1)}%`);
+  private logSummary(s: { totalTrades: number; realizedPnl: number; winRate: number }, unrealizedPnl: number): void {
+    const totalPnl = s.realizedPnl + unrealizedPnl;
+    console.log(
+      `[Agent] History: ${s.totalTrades} trades | ` +
+      `Realized=$${s.realizedPnl.toFixed(2)} Unrealized=$${unrealizedPnl.toFixed(2)} Total=$${totalPnl.toFixed(2)} | ` +
+      `WinRate=${(s.winRate * 100).toFixed(1)}%`,
+    );
   }
 }

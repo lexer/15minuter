@@ -23,7 +23,7 @@ export interface TradeRecord {
 export interface TradeHistoryData {
   trades: TradeRecord[];
   completedGames: CompletedGame[];
-  totalPnl: number;
+  realizedPnl: number;
   totalTrades: number;
   winningTrades: number;
 }
@@ -53,12 +53,17 @@ export class TradeHistory {
   private load(): TradeHistoryData {
     if (fs.existsSync(this.filePath)) {
       const raw = fs.readFileSync(this.filePath, 'utf-8');
-      return JSON.parse(raw) as TradeHistoryData;
+      const parsed = JSON.parse(raw) as TradeHistoryData & { totalPnl?: number };
+      // Migrate legacy totalPnl field to realizedPnl
+      if (parsed.realizedPnl === undefined) {
+        parsed.realizedPnl = parsed.totalPnl ?? 0;
+      }
+      return parsed;
     }
     return {
       trades: [],
       completedGames: [],
-      totalPnl: 0,
+      realizedPnl: 0,
       totalTrades: 0,
       winningTrades: 0,
     };
@@ -81,7 +86,7 @@ export class TradeHistory {
     if (idx >= 0) {
       this.data.trades[idx] = { ...this.data.trades[idx], ...updates };
       if (updates.pnl !== undefined) {
-        this.data.totalPnl += updates.pnl;
+        this.data.realizedPnl += updates.pnl;
         if (updates.pnl > 0) this.data.winningTrades++;
       }
       this.save();
@@ -101,11 +106,11 @@ export class TradeHistory {
     return [...this.data.trades];
   }
 
-  getSummary(): { totalPnl: number; totalTrades: number; winRate: number } {
+  getSummary(): { realizedPnl: number; totalTrades: number; winRate: number } {
     const closedTrades = this.data.trades.filter((t) => t.pnl !== undefined);
     const wins = closedTrades.filter((t) => (t.pnl ?? 0) > 0).length;
     return {
-      totalPnl: this.data.totalPnl,
+      realizedPnl: this.data.realizedPnl,
       totalTrades: this.data.totalTrades,
       winRate: closedTrades.length > 0 ? wins / closedTrades.length : 0,
     };

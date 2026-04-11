@@ -40,7 +40,7 @@ export interface TickAnalysis {
   games: GameAnalysis[];
   decisions?: DecisionLog[];
   openPositions?: PositionAnalysis[];
-  summary: { totalTrades: number; totalPnl: number; winRate: number };
+  summary: { totalTrades: number; realizedPnl: number; unrealizedPnl: number; totalPnl: number; winRate: number };
 }
 
 export interface DecisionLog {
@@ -175,7 +175,7 @@ export class AnalysisLogger {
     });
   }
 
-  finalizeTick(summary: { totalTrades: number; totalPnl: number; winRate: number }): void {
+  finalizeTick(summary: { totalTrades: number; realizedPnl: number; winRate: number }, unrealizedPnl: number): void {
     const decisions = this.pendingTick.decisions ?? [];
     const openPositions = this.pendingTick.openPositions ?? [];
     const games = this.pendingTick.games ?? [];
@@ -192,7 +192,9 @@ export class AnalysisLogger {
       games,
       summary: {
         totalTrades: summary.totalTrades,
-        totalPnl: Math.round(summary.totalPnl * 100) / 100,
+        realizedPnl: Math.round(summary.realizedPnl * 100) / 100,
+        unrealizedPnl: Math.round(unrealizedPnl * 100) / 100,
+        totalPnl: Math.round((summary.realizedPnl + unrealizedPnl) * 100) / 100,
         winRate: r4(summary.winRate),
       },
     };

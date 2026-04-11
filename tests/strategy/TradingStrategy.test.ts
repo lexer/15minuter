@@ -102,7 +102,7 @@ describe('TradingStrategy', () => {
   describe('evaluateEntry', () => {
     it('returns buy on first tick when ask exceeds threshold in final 5 min', () => {
       const market = makeMarket({ yesAsk: 0.94 });
-      const signal = strategy.evaluateEntry(market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000, 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.suggestedContracts).toBeGreaterThan(0);
       expect(signal.suggestedLimitPrice).toBe(0.94);
@@ -110,64 +110,57 @@ describe('TradingStrategy', () => {
 
     it('holds when more than 5 minutes remaining', () => {
       const market = makeMarket({ gameState: makeGameState(ENTRY_MAX_SECONDS + 60) });
-      const signal = strategy.evaluateEntry(market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000, 100_000);
       expect(signal.action).toBe('hold');
       expect(signal.reason).toMatch(/entry only in final/);
     });
 
     it('holds when no game state available', () => {
       const market = makeMarket({ gameState: undefined });
-      const signal = strategy.evaluateEntry(market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000, 100_000);
       expect(signal.action).toBe('hold');
       expect(signal.reason).toMatch(/No game state/);
     });
 
     it('holds when ask is at or below entry threshold', () => {
       const market = makeMarket({ yesAsk: 0.85 });
-      const signal = strategy.evaluateEntry(market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000, 100_000);
       expect(signal.action).toBe('hold');
     });
 
     it('holds when market status is not tradeable', () => {
       const market = makeMarket({ status: 'closed', yesAsk: 0.94 });
-      const signal = strategy.evaluateEntry(market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000, 100_000);
       expect(signal.action).toBe('hold');
     });
 
     it('holds when balance is too small for 1 contract', () => {
+      // cash=$0.50, dailyBudget=$1000 → 25% of budget=$250, capped at $0.50 → 0 contracts
       const market = makeMarket({ yesAsk: 0.94 });
-      const signal = strategy.evaluateEntry(market, 50);
+      const signal = strategy.evaluateEntry(market, 50, 100_000);
       expect(signal.action).toBe('hold');
     });
 
-    it('sizes to 25% of balance', () => {
-      // ask=0.91, balance=$1000 → 25% = $250 → floor(25000/91) = 274
+    it('sizes to 25% of daily budget', () => {
+      // ask=0.91, dailyBudget=$1000 → 25% = $250 → floor(25000/91) = 274
       const market = makeMarket({ yesAsk: 0.91 });
-      const signal = strategy.evaluateEntry(market, 100_000);
+      const signal = strategy.evaluateEntry(market, 100_000, 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.suggestedContracts).toBe(274);
     });
 
-    it('sizes to 25% of balance at $1000 (current budget)', () => {
-      // ask=0.95, balance=$1000 → 25% = $250 → floor(25000/95) = 263
+    it('sizes to 25% of daily budget regardless of open positions', () => {
+      // dailyBudget=$1000, cash=$250, ask=0.95 → 25% of $1000 = $250 capped at $250 → floor(25000/95) = 263
       const market = makeMarket({ yesAsk: 0.95 });
-      const signal = strategy.evaluateEntry(market, 100_000);
+      const signal = strategy.evaluateEntry(market, 25_000, 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.suggestedContracts).toBe(263);
     });
 
-    it('accounts for open positions in trade sizing', () => {
-      // cash=$250, open=$250 → total=$500, 25% = $125, ask=0.94 → floor(12500/94) = 132
+    it('caps spend at available cash when cash is less than 25% of daily budget', () => {
+      // dailyBudget=$1000, cash=$100, 25% of budget=$250, capped at $100 → floor(10000/94) = 106
       const market = makeMarket({ yesAsk: 0.94 });
-      const s = strategy.evaluateEntry(market, 25_000, 25_000);
-      expect(s.action).toBe('buy');
-      expect(s.suggestedContracts).toBe(132);
-    });
-
-    it('caps spend at available cash even when open positions are large', () => {
-      // cash=$100, open=$900 → total=$1000, 25%=$250 capped at $100 → floor(10000/94)=106
-      const market = makeMarket({ yesAsk: 0.94 });
-      const s = strategy.evaluateEntry(market, 10_000, 90_000);
+      const s = strategy.evaluateEntry(market, 10_000, 100_000);
       expect(s.action).toBe('buy');
       expect(s.suggestedContracts).toBe(106);
     });
@@ -241,40 +234,40 @@ describe('TradingStrategy', () => {
 
   describe('evaluateTopUp', () => {
     it('returns contracts shortfall when position is below target', () => {
-      // balance=$1000, open=$0, 25%=$250, ask=0.94 → target=floor(25000/94)=265; held=100 → topUp=165
+      // dailyBudget=$1000, cash=$1000, 25%=$250, ask=0.94 → target=floor(25000/94)=265; held=100 → topUp=165
       const market = makeMarket({ yesAsk: 0.94 });
-      const result = strategy.evaluateTopUp(market, 100, 100_000, 0);
+      const result = strategy.evaluateTopUp(market, 100, 100_000, 100_000);
       expect(result.contracts).toBe(165);
     });
 
     it('returns 0 when already at or above target', () => {
       const market = makeMarket({ yesAsk: 0.94 });
-      const result = strategy.evaluateTopUp(market, 265, 100_000, 0);
+      const result = strategy.evaluateTopUp(market, 265, 100_000, 100_000);
       expect(result.contracts).toBe(0);
     });
 
     it('returns 0 when ask is at or below entry threshold', () => {
       const market = makeMarket({ yesAsk: 0.85 });
-      const result = strategy.evaluateTopUp(market, 0, 100_000, 0);
+      const result = strategy.evaluateTopUp(market, 0, 100_000, 100_000);
       expect(result.contracts).toBe(0);
     });
 
     it('returns 0 when outside entry window', () => {
       const market = makeMarket({ gameState: makeGameState(ENTRY_MAX_SECONDS + 60) });
-      const result = strategy.evaluateTopUp(market, 0, 100_000, 0);
+      const result = strategy.evaluateTopUp(market, 0, 100_000, 100_000);
       expect(result.contracts).toBe(0);
     });
 
     it('returns 0 when no game state', () => {
       const market = makeMarket({ gameState: undefined });
-      const result = strategy.evaluateTopUp(market, 0, 100_000, 0);
+      const result = strategy.evaluateTopUp(market, 0, 100_000, 100_000);
       expect(result.contracts).toBe(0);
     });
 
-    it('accounts for open positions in sizing', () => {
-      // cash=$250, open=$750 → total=$1000, 25%=$250 capped at $250, ask=0.94 → target=265; held=100 → topUp=165
+    it('caps top-up at available cash when cash is less than 25% of daily budget', () => {
+      // dailyBudget=$1000, cash=$250, 25% of budget=$250 capped at $250, ask=0.94 → target=265; held=100 → topUp=165
       const market = makeMarket({ yesAsk: 0.94 });
-      const result = strategy.evaluateTopUp(market, 100, 25_000, 75_000);
+      const result = strategy.evaluateTopUp(market, 100, 25_000, 100_000);
       expect(result.contracts).toBe(165);
     });
   });

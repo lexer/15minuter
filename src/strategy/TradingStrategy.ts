@@ -9,7 +9,7 @@ export const EXIT_PROBABILITY_GUARD = 0.85; // don't exit on bid dip if model pr
 export const EXIT_CONFIRMATION_TICKS = 3;   // consecutive ticks below bid threshold required to exit
 export const EXIT_EMERGENCY_DROP = 0.15;    // single-tick bid crash threshold — exit immediately bypassing prob guard
 
-// Risk 25% of current balance on a single trade
+// Risk 25% of starting daily budget on a single trade
 const MAX_BALANCE_RISK_FRACTION = 0.25;
 
 // Quarter-Kelly: used for informational sizing only
@@ -69,7 +69,7 @@ export class TradingStrategy {
   evaluateEntry(
     market: BasketballMarket,
     availableBalanceCents: number,
-    openPositionsCostCents: number = 0,
+    dailyBudgetCents: number,
   ): TradeSignal {
     if (!this.isTradeable(market.status)) {
       return { action: 'hold', reason: `Market not tradeable (status=${market.status})`, market };
@@ -109,10 +109,9 @@ export class TradingStrategy {
       };
     }
 
-    // Size at 25% of total portfolio (cash + open positions), capped at available cash
-    const totalFundsCents = availableBalanceCents + openPositionsCostCents;
+    // Size at 25% of starting daily budget, capped at available cash
     const maxSpendCents = Math.min(
-      Math.floor(totalFundsCents * MAX_BALANCE_RISK_FRACTION),
+      Math.floor(dailyBudgetCents * MAX_BALANCE_RISK_FRACTION),
       availableBalanceCents,
     );
     const costPerContractCents = Math.round(market.yesAsk * 100);
@@ -209,7 +208,7 @@ export class TradingStrategy {
     market: BasketballMarket,
     heldContracts: number,
     balanceCents: number,
-    openPositionsCostCents: number,
+    dailyBudgetCents: number,
   ): { contracts: number; reason: string } {
     if (!market.gameState) {
       return { contracts: 0, reason: 'No game state' };
@@ -227,9 +226,8 @@ export class TradingStrategy {
       return { contracts: 0, reason: `Ask ${(market.yesAsk * 100).toFixed(0)}¢ outside entry range` };
     }
 
-    const totalFundsCents = balanceCents + openPositionsCostCents;
     const maxSpendCents = Math.min(
-      Math.floor(totalFundsCents * MAX_BALANCE_RISK_FRACTION),
+      Math.floor(dailyBudgetCents * MAX_BALANCE_RISK_FRACTION),
       balanceCents,
     );
     const costPerContractCents = Math.round(market.yesAsk * 100);

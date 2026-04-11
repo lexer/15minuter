@@ -75,7 +75,7 @@ describe('TradeHistory', () => {
     h.updateTrade('trade-2', { pnl: -0.5 });
     const summary = h.getSummary();
     expect(summary.totalTrades).toBe(2);
-    expect(summary.totalPnl).toBeCloseTo(0.5);
+    expect(summary.realizedPnl).toBeCloseTo(0.5);
     expect(summary.winRate).toBe(0.5);
   });
 });
