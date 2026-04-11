@@ -8,8 +8,8 @@ const WS_PATH = '/trade-api/ws/v2';
 
 const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS     = 30_000;
-const PING_INTERVAL_MS     = 30_000;  // send ping every 30s
-const PONG_TIMEOUT_MS      = 10_000;  // force-reconnect if no pong within 10s
+// Kalshi sends heartbeat pings every 10s; if no frame arrives for 45s the connection is dead
+const WATCHDOG_MS          = 45_000;
 
 // ── Message types ─────────────────────────────────────────────────────────────
 
@@ -64,8 +64,7 @@ export declare interface KalshiWebSocket {
 export class KalshiWebSocket extends EventEmitter {
   private socket:           WebSocket | null = null;
   private reconnectDelay    = INITIAL_RECONNECT_MS;
-  private pingTimer:        ReturnType<typeof setInterval> | null = null;
-  private pongTimer:        ReturnType<typeof setTimeout>  | null = null;
+  private watchdogTimer:    ReturnType<typeof setTimeout>  | null = null;
   private readonly subscribedTickers = new Set<string>();
   private cmdId   = 1;
   private running = false;
@@ -122,25 +121,21 @@ export class KalshiWebSocket extends EventEmitter {
   // ── Private helpers ─────────────────────────────────────────────────────────
 
   private clearHeartbeat(): void {
-    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
-    if (this.pongTimer) { clearTimeout(this.pongTimer);  this.pongTimer = null; }
+    if (this.watchdogTimer) { clearTimeout(this.watchdogTimer); this.watchdogTimer = null; }
+  }
+
+  private resetWatchdog(ws: WebSocket): void {
+    if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
+    this.watchdogTimer = setTimeout(() => {
+      console.error(`[WS] Watchdog timeout — no activity for ${WATCHDOG_MS / 1000}s, forcing reconnect`);
+      ws.terminate();
+    }, WATCHDOG_MS);
   }
 
   private startHeartbeat(ws: WebSocket): void {
-    this.clearHeartbeat();
-    this.pingTimer = setInterval(() => {
-      if (ws.readyState !== WebSocket.OPEN) return;
-      ws.ping();
-      // Expect a pong back within PONG_TIMEOUT_MS
-      this.pongTimer = setTimeout(() => {
-        console.error('[WS] Pong timeout — forcing reconnect');
-        ws.terminate();
-      }, PONG_TIMEOUT_MS);
-    }, PING_INTERVAL_MS);
-
-    ws.on('pong', () => {
-      if (this.pongTimer) { clearTimeout(this.pongTimer); this.pongTimer = null; }
-    });
+    this.resetWatchdog(ws);
+    // Kalshi sends ping frames every 10s; reset watchdog on each one
+    ws.on('ping', () => this.resetWatchdog(ws));
   }
 
   private sign(timestamp: number): string {
@@ -196,6 +191,7 @@ export class KalshiWebSocket extends EventEmitter {
       });
 
       ws.on('message', (data: Buffer) => {
+        this.resetWatchdog(ws);
         try {
           const env = JSON.parse(data.toString()) as WsEnvelope;
           if (!env.msg) return;
