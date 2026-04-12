@@ -81,23 +81,23 @@ winProbability = 0.3 × marketMid + 0.7 × btcGaussianModel
 Computed every tick and written to the analysis log. **Not used for trading decisions** — entry and exit are gated solely on market ask/bid price levels. The model was removed from the decision path because momentum and market-mid blending produced inflated estimates (e.g. 91.9% from a +0.016% price lead), causing premature entries and blocking valid exits.
 
 ### 6. Trading Window — Entry and Market Discovery
-Only trade in the final **90 seconds** of each 15-minute window (up to and including market close):
-- The 90-second ceiling starts 30 seconds before the 60-second BRTI averaging window begins, capturing early directional price information.
+Only trade in the final **120 seconds** of each 15-minute window (up to and including market close):
+- The 120-second ceiling starts 60 seconds before the 60-second BRTI averaging window begins, capturing more directional price information.
 - No minimum floor: entries and exit management continue right up to market close.
 
-`isInTradingWindow = secondsLeft ∈ [0, 90]` is computed from `market.closeTime - Date.now()`.
+`isInTradingWindow = secondsLeft ∈ [0, 120]` is computed from `market.closeTime - Date.now()`.
 
 ### 7. Entry Criteria
 Entry is evaluated symmetrically for YES and NO sides. Market ask price is the **sole gate** — model probability is logged but does not influence entry.
 
 **YES entry** (bullish):
-1. Market must be `active` or `open`; `isInTradingWindow = true` (secondsLeft ≤ 90)
-2. YES ask **> 90¢ and ≤ 98¢** (market-implied probability ≥ 90%, capped to avoid illiquid fills at 99¢+)
+1. Market must be `active` or `open`; `isInTradingWindow = true` (secondsLeft ≤ 120)
+2. YES ask **> 85¢ and ≤ 98¢** — R:R at 85¢: max win 15¢, hard stop loss 25¢ (breakeven ~63%)
 3. Size: `min($10 window budget, available cash) / yesAsk` contracts
 
 **NO entry** (bearish):
-1. Market must be `active` or `open`; `isInTradingWindow = true` (secondsLeft ≤ 90)
-2. NO ask **> 90¢ and ≤ 98¢** (i.e. YES bid **< 10¢**; market prices NO at ≥ 90%)
+1. Market must be `active` or `open`; `isInTradingWindow = true` (secondsLeft ≤ 120)
+2. NO ask **> 85¢ and ≤ 98¢** (i.e. YES bid **< 15¢**)
 3. Size: `min($10 window budget, available cash) / noAsk` contracts
 
 No confirmation window. IOC order semantics: a momentary ask spike with no real liquidity results in an unfilled order, not a bad fill.

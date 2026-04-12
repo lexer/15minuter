@@ -1,10 +1,10 @@
 import { BtcMarket } from '../services/MarketService';
 
 // ── Entry thresholds ─────────────────────────────────────────────────────────
-export const ENTRY_ASK_THRESHOLD  = 0.9;   // ask must exceed this to enter (YES or NO side)
+export const ENTRY_ASK_THRESHOLD  = 0.85;  // ask must exceed this to enter (YES or NO side)
 export const ENTRY_MAX_ASK        = 0.98;  // ask must not exceed this (avoid 99¢+ illiquid fills)
 export const ENTRY_MIN_SECONDS    = 0;     // enter right up to market close
-export const ENTRY_MAX_SECONDS    = 90;    // enter up to 90s before close
+export const ENTRY_MAX_SECONDS    = 120;   // enter up to 120s before close
 
 // ── Exit thresholds ──────────────────────────────────────────────────────────
 /** Take-profit: bid ≥ 99¢ → sell immediately, locking in near-maximum gain. */

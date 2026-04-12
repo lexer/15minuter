@@ -41,7 +41,7 @@ describe('TradingStrategy', () => {
 
   describe('evaluateEntry', () => {
     it('returns YES buy when YES ask exceeds threshold', () => {
-      // yesAsk=0.94 > 90¢ → qualifies regardless of model probability
+      // yesAsk=0.94 > 85¢ → qualifies regardless of model probability
       const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94, winProbability: 0.93 }), 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.side).toBe('yes');
@@ -49,14 +49,14 @@ describe('TradingStrategy', () => {
       expect(signal.suggestedLimitPrice).toBe(0.94);
     });
 
-    it('returns YES buy even when model probability is low if market ask > 90¢', () => {
+    it('returns YES buy even when model probability is low if market ask > 85¢', () => {
       // Market price is the sole gate — model probability is logged only
       const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94, winProbability: 0.50 }), 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.side).toBe('yes');
     });
 
-    it('returns NO buy when NO ask > 90¢', () => {
+    it('returns NO buy when NO ask > 85¢', () => {
       // noAsk=0.95 → buy NO; model probability is logged only
       const signal = strategy.evaluateEntry(
         makeMarket({ winProbability: 0.05, noAsk: 0.95, noBid: 0.93, yesAsk: 0.07, yesBid: 0.05 }),
@@ -68,7 +68,7 @@ describe('TradingStrategy', () => {
       expect(signal.suggestedContracts).toBeGreaterThan(0);
     });
 
-    it('holds when neither YES nor NO ask exceeds 90¢', () => {
+    it('holds when neither YES nor NO ask exceeds 85¢', () => {
       const signal = strategy.evaluateEntry(
         makeMarket({ yesAsk: 0.5, noAsk: 0.5 }),
         100_000,
@@ -86,6 +86,12 @@ describe('TradingStrategy', () => {
     it('holds when ask is exactly at entry threshold (not strictly above)', () => {
       const signal = strategy.evaluateEntry(makeMarket({ yesAsk: ENTRY_ASK_THRESHOLD }), 100_000);
       expect(signal.action).toBe('hold');
+    });
+
+    it('buys when ask is between 85¢ and 90¢ (new lower range)', () => {
+      const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.87 }), 100_000);
+      expect(signal.action).toBe('buy');
+      expect(signal.side).toBe('yes');
     });
 
     it('holds when ask is above 98¢ cap', () => {
@@ -108,7 +114,7 @@ describe('TradingStrategy', () => {
     });
 
     it('holds when balance is too small for 1 contract on either side', () => {
-      // ask=0.94 → 94¢/contract; balance=50 cents → 0 YES contracts; NO ask=8¢ → not ≥90¢
+      // ask=0.94 → 94¢/contract; balance=50 cents → 0 YES contracts; NO ask=8¢ → not >85¢
       const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94 }), 50);
       expect(signal.action).toBe('hold');
     });
@@ -206,8 +212,9 @@ describe('TradingStrategy', () => {
     });
 
     it('returns 0 when ask is out of range', () => {
-      expect(strategy.evaluateTopUp(makeMarket({ yesAsk: 0.85 }), 0, 100_000).contracts).toBe(0);
-      expect(strategy.evaluateTopUp(makeMarket({ yesAsk: 0.99 }), 0, 100_000).contracts).toBe(0);
+      expect(strategy.evaluateTopUp(makeMarket({ yesAsk: 0.80 }), 0, 100_000).contracts).toBe(0); // below 85¢ threshold
+      expect(strategy.evaluateTopUp(makeMarket({ yesAsk: 0.85 }), 0, 100_000).contracts).toBe(0); // exactly at threshold (not strictly above)
+      expect(strategy.evaluateTopUp(makeMarket({ yesAsk: 0.99 }), 0, 100_000).contracts).toBe(0); // above 98¢ cap
       expect(strategy.evaluateTopUp(makeMarket({ yesAsk: 1.0  }), 0, 100_000).contracts).toBe(0);
     });
 

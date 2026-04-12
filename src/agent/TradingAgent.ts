@@ -532,6 +532,7 @@ export class TradingAgent {
           } else {
             console.log(`[Agent] EXTERNAL CLOSE detected: ${trade.ticker} — marking closed`);
             this.history.updateTrade(trade.id, { exitTime: new Date().toISOString(), exitReason: 'manual', pnl: 0 });
+            this.recentlyExited.add(trade.ticker);
           }
         }
       }
@@ -559,6 +560,13 @@ export class TradingAgent {
 
     const correctedTotal = trade.totalCost - (pending.limitPrice * pending.filledContracts) + acc.totalCost;
     const correctedAvg   = correctedTotal / trade.contracts;
+
+    if (correctedAvg > 1.0 || correctedAvg < 0) {
+      process.stderr.write(`[Agent] FILL PRICE SANITY FAIL ${trade.ticker}: correctedAvg=${correctedAvg.toFixed(4)} — discarding correction\n`);
+      this.fillAccumulator.delete(orderId);
+      this.orderTradeMap.delete(orderId);
+      return;
+    }
 
     if (Math.abs(correctedTotal - trade.totalCost) > 0.0001) {
       this.history.updateTrade(pending.tradeId, {
