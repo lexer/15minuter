@@ -135,18 +135,6 @@ export class TradingStrategy {
   }
 
   evaluateExit(market: BasketballMarket, heldContracts: number): TradeSignal {
-    if (!this.isTradeable(market.status)) {
-      this.lowBidCounts.delete(market.ticker);
-      this.previousBids.delete(market.ticker);
-      return {
-        action: 'sell',
-        reason: `Market ${market.status} — closing position`,
-        market,
-        suggestedContracts: heldContracts,
-        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
-      };
-    }
-
     // Emergency exit: single-tick bid crash (≥15¢ drop) overrides probability guard
     const prevBid = this.previousBids.get(market.ticker);
     this.previousBids.set(market.ticker, market.yesBid);

@@ -38,7 +38,6 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 2. Only place trades during the **fourth quarter of live games** (final 10 minutes only — ≤ 600 seconds remaining).
 3. **Entry**: YES ask **> 90¢** — buy at ask price immediately on the first qualifying tick (IOC order). No confirmation window; a momentary spike with no liquidity simply results in an unfilled order.
 4. **Exit** (evaluated in priority order on each tick):
-   - Market inactive/closed → sell immediately at bid.
    - Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit).
    - **bid ≤ 70¢ → hard stop: sell immediately, no probability guard, no confirmation window.** Caps max loss at ~20¢/contract.
    - 70¢ < bid ≤ 80¢ AND blended win probability ≥ 85% → hold (probability guard blocks exit).

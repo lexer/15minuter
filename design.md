@@ -72,12 +72,11 @@ No confirmation window: IOC order semantics make it redundant — a momentary as
 
 Checks are evaluated in priority order on every tick:
 
-1. Market inactive/closed → sell immediately at bid
-2. Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit, overrides probability guard)
-3. **bid ≤ 70¢ → hard stop: sell immediately, no probability guard, no confirmation window**
-4. 70¢ < bid ≤ 80¢ AND blended winProbability ≥ 85% → hold (probability guard blocks soft exit)
-5. 70¢ < bid ≤ 80¢ AND blended winProbability < 85% → require **3 consecutive ticks**, then sell at bid
-6. bid > 80¢ → hold
+1. Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit, overrides probability guard)
+2. **bid ≤ 70¢ → hard stop: sell immediately, no probability guard, no confirmation window**
+3. 70¢ < bid ≤ 80¢ AND blended winProbability ≥ 85% → hold (probability guard blocks soft exit)
+4. 70¢ < bid ≤ 80¢ AND blended winProbability < 85% → require **3 consecutive ticks**, then sell at bid
+5. bid > 80¢ → hold
 
 The hard stop caps the worst-case loss on a single trade at ~20¢/contract (entry >90¢, hard stop at 70¢). The probability guard only applies in the 70–80¢ soft zone, preventing premature exits while the model still shows high confidence.
 

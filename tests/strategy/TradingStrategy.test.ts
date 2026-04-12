@@ -236,12 +236,6 @@ describe('TradingStrategy', () => {
       expect(signal.action).toBe('hold');
     });
 
-    it('returns sell when market is not tradeable', () => {
-      const market = makeMarket({ status: 'closed', yesBid: 0.99 });
-      const signal = strategy.evaluateExit(market, 5);
-      expect(signal.action).toBe('sell');
-    });
-
     it('returns sell at exactly exit threshold after confirmation', () => {
       const market = makeMarket({ yesBid: EXIT_PROBABILITY_THRESHOLD, winProbability: 0.75 });
       for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
