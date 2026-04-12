@@ -64,20 +64,13 @@ export interface PositionAnalysis {
   unrealizedPnl?: number;
 }
 
-const WINDOW_MS = 15 * 60 * 1_000; // 15-minute window size
-
-function windowDir(windowEndMs: number): string {
-  const d       = new Date(windowEndMs);
-  const timeStr = d.toLocaleTimeString('en-GB', { timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit', hour12: false }).replace(':', '-');
-  return path.resolve(process.cwd(), 'logs', 'analysis', timeStr);
-}
+const ANALYSIS_DIR = path.resolve(process.cwd(), 'logs', 'analysis');
 
 export class AnalysisLogger {
   private pendingTick:   Partial<TickAnalysis> = {};
   private pendingTicker: string                = '';
   /** Cache dir path per window to avoid repeated mkdirSync. */
-  private cachedWindowEnd: number = 0;
-  private cachedDir:       string = '';
+  private dirCreated = false;
 
   startTick(balanceCents: number): void {
     this.pendingTick = {
@@ -177,14 +170,11 @@ export class AnalysisLogger {
   }
 
   private resolveLogPath(): string {
-    const windowEndMs = Math.ceil(Date.now() / WINDOW_MS) * WINDOW_MS;
-    if (windowEndMs !== this.cachedWindowEnd) {
-      this.cachedDir      = windowDir(windowEndMs);
-      this.cachedWindowEnd = windowEndMs;
-      fs.mkdirSync(this.cachedDir, { recursive: true });
+    if (!this.dirCreated) {
+      fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
+      this.dirCreated = true;
     }
-    const ticker = this.pendingTicker || 'unknown';
-    return path.join(this.cachedDir, `${ticker}.log`);
+    return path.join(ANALYSIS_DIR, `${this.pendingTicker || 'unknown'}.log`);
   }
 
   finalizeTick(

@@ -26,7 +26,7 @@ src/
     TradingStrategy.ts     — Entry/exit signals; $10/window budget sizing
   storage/
     TradeHistory.ts        — Persists trade records to btc_trade_history.json
-    AnalysisLogger.ts      — Per-tick JSON-lines analysis log (logs/analysis/HH-MM/<ticker>.log)
+    AnalysisLogger.ts      — Per-tick JSON-lines analysis log (logs/analysis/<ticker>.log)
   agent/
     TradingAgent.ts        — Event-driven orchestrator: WS events + periodic loops
   index.ts                 — Entry point; PID lock (btc_agent.pid); log redirection
@@ -137,11 +137,11 @@ All runtime files use the `btc_` prefix to avoid collisions with other agents:
 | `btc_agent.pid` | Single-instance lock |
 | `btc_agent_YYYY-MM-DD.log` | Agent stdout (PST-dated) |
 | `btc_errors.log` | Errors (transient network errors excluded) |
-| `logs/analysis/HH-MM/<ticker>.log` | Per-tick JSON-lines analysis log (one file per ticker per 15-min window) |
+| `logs/analysis/<ticker>.log` | Per-tick JSON-lines analysis log (one file per ticker) |
 | `btc_trade_history.json` | All trade records |
 
 ### 11. Logging
-Analysis logs are written to `logs/analysis/HH-MM/<ticker>.log` — one file per Kalshi market per 15-minute window (HH-MM = window close time in PST). One JSON-lines entry per **WebSocket ticker tick**, written for all subscribed markets at all times (not limited to the trading window). Each entry includes:
+Analysis logs are written to `logs/analysis/<ticker>.log` — one file per Kalshi market per 15-minute window (HH-MM = window close time in PST). One JSON-lines entry per **WebSocket ticker tick**, written for all subscribed markets at all times (not limited to the trading window). Each entry includes:
 - BTC state: `currentPrice`, market snapshots for all tracked markets
 - Market snapshots: `ticker`, `targetPrice` (`floor_strike`), `sixtySecondsAvg`, `priceChangePct`, `winProbability`, `ask`, `bid`, `secondsLeft`, optional `signal`/`signalReason`
 - `sixtySecondsAvg` is **always present** (not gated on settlement window):
