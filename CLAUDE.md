@@ -12,7 +12,7 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 
 ## Coding Standards
 
-1. All code changes must be incremental, committed **and pushed** to the repository: https://github.com/lexer/bballer  
+1. All code changes must be incremental, committed **and pushed** to the repository: https://github.com/lexer/15minuter  
 2. The codebase must be written entirely in **TypeScript**.  
 3. All code must be **strongly typed**.  
 4. Design decisions must be documented in a `design.md` file.  
