@@ -42,7 +42,7 @@ const BRTI_STATE: BrtiState = {
 describe('MarketService', () => {
   describe('trading window classification', () => {
     it('marks market as in window when secondsLeft is between min and max', async () => {
-      const svc = new MarketService(makeClient([makeRawMarket(TICKER_80K, 120)]) as never, makeMonitor(BRTI_STATE) as never);
+      const svc = new MarketService(makeClient([makeRawMarket(TICKER_80K, 30)]) as never, makeMonitor(BRTI_STATE) as never);
       const [m] = await svc.getAllLiveBtcMarkets();
       expect(m.isInTradingWindow).toBe(true);
       expect(m.secondsLeft).toBeGreaterThanOrEqual(TRADING_WINDOW_MIN_SECONDS);
@@ -56,7 +56,7 @@ describe('MarketService', () => {
     });
 
     it('marks market outside window when secondsLeft < min', async () => {
-      const svc = new MarketService(makeClient([makeRawMarket(TICKER_80K, TRADING_WINDOW_MIN_SECONDS - 10)]) as never, makeMonitor(BRTI_STATE) as never);
+      const svc = new MarketService(makeClient([makeRawMarket(TICKER_80K, 2)]) as never, makeMonitor(BRTI_STATE) as never);
       const [m] = await svc.getAllLiveBtcMarkets();
       expect(m.isInTradingWindow).toBe(false);
     });
@@ -131,7 +131,7 @@ describe('MarketService', () => {
       const inTicker  = `KXBTC15M-26APR11-T80000`;
       const outTicker = `KXBTC15M-26APR11-T81000`;
       const svc = new MarketService(makeClient([
-        makeRawMarket(inTicker,  150),
+        makeRawMarket(inTicker,  30),
         makeRawMarket(outTicker, TRADING_WINDOW_MAX_SECONDS + 60),
       ]) as never, makeMonitor(BRTI_STATE) as never);
       await svc.getAllLiveBtcMarkets();

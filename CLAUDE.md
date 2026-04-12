@@ -35,7 +35,7 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 ## Trading Strategy
 
 1. Trade exclusively on **`KXBTC15M` Bitcoin 15-minute price-direction markets**. Each market resolves YES if BTC closes the 15-minute window above its opening price, NO if below. Do not trade any other market type.
-2. Only trade during the **final 60–300 seconds** of a 15-minute window (the entry window). Below 60s: liquidity dries up. Above 300s: too much uncertainty.
+2. Only trade during the **final 60 seconds** of a 15-minute window (the settlement window). Entering at the start of BRTI averaging gives the most information about the outcome. A 5-second floor ensures there is time for an IOC order to execute.
 3. **Entry**: YES ask **> 90¢** — buy immediately on the first qualifying tick (IOC order). No confirmation window.
 4. **Exit** (evaluated in priority order on each tick):
    - Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit).

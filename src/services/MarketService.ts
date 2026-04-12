@@ -4,10 +4,11 @@ import { WsTickerMessage } from '../api/KalshiWebSocket';
 import { BtcPriceMonitor, BrtiState } from './BtcPriceMonitor';
 import { BtcProbabilityModel } from './BtcProbabilityModel';
 
-// Enter in the final 60–300 seconds of the 15-min window.
-// Below 60s: too close to expiry, low liquidity. Above 300s: outcome too uncertain.
-export const TRADING_WINDOW_MIN_SECONDS = 60;
-export const TRADING_WINDOW_MAX_SECONDS = 300;
+// Enter only in the final 60 seconds of the 15-min window (the settlement window).
+// Entering at the start of BRTI averaging gives the most information about the outcome.
+// A 5-second floor ensures there is time for an IOC order to execute.
+export const TRADING_WINDOW_MIN_SECONDS = 5;
+export const TRADING_WINDOW_MAX_SECONDS = 60;
 
 // 30% market mid, 70% BTC Gaussian model — market mid captures flow from larger participants
 const BLEND_MARKET_WEIGHT = 0.3;
