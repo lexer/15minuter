@@ -171,5 +171,21 @@ describe('BtcProbabilityModel', () => {
     it('returns 0.5 for zero threshold', () => {
       expect(model.calculateSettlement(80000, 0, [], 0, 30)).toBeCloseTo(0.5);
     });
+
+    it('uses projected 60-second average, not spot price — samples above threshold shift prob up', () => {
+      // Spot price = threshold exactly → 50/50 if model used spot
+      // But 30s of samples at +0.6% above threshold → projected avg > threshold → prob > 0.5
+      const highSamples = Array(30).fill(T * 1.006); // 30s @ +0.6%
+      const prob = model.calculateSettlement(T, T, highSamples, 30, 30);
+      expect(prob).toBeGreaterThan(0.9);
+    });
+
+    it('uses projected 60-second average, not spot price — samples below threshold shift prob down', () => {
+      // Spot price = threshold exactly → 50/50 if model used spot
+      // But 30s of samples at -0.6% below threshold → projected avg < threshold → prob < 0.5
+      const lowSamples = Array(30).fill(T * 0.994); // 30s @ -0.6%
+      const prob = model.calculateSettlement(T, T, lowSamples, 30, 30);
+      expect(prob).toBeLessThan(0.1);
+    });
   });
 });

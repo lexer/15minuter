@@ -179,6 +179,18 @@ describe('MarketService', () => {
       expect(updated!.yesAsk).toBeCloseTo(0.97);
     });
 
+    it('derives noBid/noAsk from WS YES prices so NO entry orders use current prices', async () => {
+      const svc = new MarketService(makeClient([makeRawMarket(TICKER_80K, 30)]) as never, makeMonitor(BRTI_STATE) as never);
+      await svc.getAllLiveBtcMarkets();
+
+      // Simulate bearish market: YES at 2¢ bid / 3¢ ask → NO should be 97¢ bid / 98¢ ask
+      const updated = svc.applyTickerUpdate({
+        type: 'ticker', market_ticker: TICKER_80K, yes_bid_dollars: '0.02', yes_ask_dollars: '0.03',
+      } as never);
+      expect(updated!.noAsk).toBeCloseTo(1 - 0.02, 2); // 0.98
+      expect(updated!.noBid).toBeCloseTo(1 - 0.03, 2); // 0.97
+    });
+
     it('returns null for unknown ticker', () => {
       const svc = new MarketService(makeClient([]) as never, makeMonitor() as never);
       expect(svc.applyTickerUpdate({ type: 'ticker', market_ticker: 'UNKNOWN' } as never)).toBeNull();

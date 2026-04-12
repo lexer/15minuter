@@ -98,6 +98,12 @@ export class MarketService {
     const yesAsk    = msg.yes_ask_dollars !== undefined ? parseFloat(String(msg.yes_ask_dollars)) : market.yesAsk;
     const lastPrice = msg.price_dollars   !== undefined ? parseFloat(String(msg.price_dollars))   : market.lastPrice;
 
+    // NO prices are not in WS ticker messages — derive them from the YES spread.
+    // noAsk = 1 - yesBid: price to buy NO (counterparty sells NO = buys YES at yesBid)
+    // noBid = 1 - yesAsk: price to sell NO (counterparty buys NO = sells YES at yesAsk)
+    const noBid = yesAsk > 0 ? Math.round((1 - yesAsk) * 100) / 100 : market.noBid;
+    const noAsk = yesBid > 0 ? Math.round((1 - yesBid) * 100) / 100 : market.noAsk;
+
     const secondsLeft       = this.computeSecondsLeft(market.closeTime);
     const isInTradingWindow = this.inWindow(secondsLeft);
     const winProbability    = market.brtiState
@@ -108,6 +114,8 @@ export class MarketService {
       ...market,
       yesBid,
       yesAsk,
+      noBid,
+      noAsk,
       lastPrice,
       winProbability,
       secondsLeft,
