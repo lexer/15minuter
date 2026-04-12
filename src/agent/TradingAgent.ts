@@ -98,11 +98,24 @@ export class TradingAgent {
   private async onTicker(msg: WsTickerMessage): Promise<void> {
     const market = this.markets.applyTickerUpdate(msg);
     if (!market) return;
-    // Handle open positions regardless of window, but only scan entries inside window
+
     const openTrade = this.history.getOpenTrades().find((t) => t.ticker === market.ticker);
-    if (openTrade || market.isInTradingWindow) {
-      await this.handleMarket(market);
-    }
+    if (!openTrade && !market.isInTradingWindow) return;
+
+    // Log one analysis entry per WS tick — gives backtest-accurate bid/ask resolution.
+    // startTick/logBrtiState must precede handleMarket so logMarketEval can annotate the snapshot.
+    const brtiPrice = this.markets.getLatestBrtiState()?.currentPrice;
+    this.analysis.startTick(this.cachedBalanceCents);
+    this.analysis.logBrtiState(brtiPrice, [market]);
+
+    await this.handleMarket(market);
+
+    this.analysis.logOpenPositions(
+      this.history.getOpenTrades(),
+      new Map([[market.ticker, market]]),
+    );
+    const unrealizedPnl = this.computeUnrealizedPnl(this.history.getOpenTrades());
+    this.analysis.finalizeTick(this.history.getSummary(), unrealizedPnl);
   }
 
   private async onFill(msg: WsFillMessage): Promise<void> {
@@ -151,8 +164,8 @@ export class TradingAgent {
 
   /**
    * Refresh BRTI price + settlement samples every 5s.
-   * Trade evaluation is driven exclusively by onTicker (WS bid/ask updates).
-   * This loop only handles what WS can't: BRTI state, analysis logging, and status.
+   * Trade evaluation and analysis logging are driven by onTicker (WS bid/ask updates).
+   * This loop only handles what WS can't: BRTI state refresh and console status.
    */
   private async btcStateLoop(): Promise<void> {
     if (!this.running) return;
@@ -169,17 +182,7 @@ export class TradingAgent {
         : 'BRTI N/A (waiting for feed)';
       console.log(`[Agent] ${brtiSummary} | ${tradingWindowMarkets.length} market(s) in window | deployed=$${(openPositionsCost / 100).toFixed(2)}`);
 
-      this.analysis.startTick(this.cachedBalanceCents);
-      this.analysis.logBrtiState(brtiState?.currentPrice, this.markets.getCachedMarkets());
-      const marketMap = new Map(this.markets.getCachedMarkets().map((m) => [m.ticker, m]));
-      this.analysis.logOpenPositions(openTrades, marketMap);
-
-      const unrealizedPnl = this.computeUnrealizedPnl(openTrades);
-      this.logSummary(this.history.getSummary(), unrealizedPnl);
-
-      if (openTrades.length > 0 || tradingWindowMarkets.length > 0 || brtiState) {
-        this.analysis.finalizeTick(this.history.getSummary(), unrealizedPnl);
-      }
+      this.logSummary(this.history.getSummary(), this.computeUnrealizedPnl(openTrades));
     } catch (err) {
       console.error('[Agent] btcStateLoop error:', err);
     }
@@ -240,7 +243,6 @@ export class TradingAgent {
   private async managePosition(market: BtcMarket, record: TradeRecord): Promise<void> {
     if (market.result) {
       this.pendingSettlement.delete(market.ticker);
-      this.strategy.clearExitConfirmation(market.ticker);
       this.recordSettlement(record, market);
       return;
     }
@@ -257,13 +259,11 @@ export class TradingAgent {
       return;
     }
 
-    const isCascade = this.liquidationMonitor.isLiquidationCascade();
-    const signal    = this.strategy.evaluateExit(market, record.contracts, isCascade, record.side);
+    const signal = this.strategy.evaluateExit(market, record.contracts, record.side);
 
     if (signal.action === 'sell') {
       if (this.pendingExits.has(market.ticker)) return;
       console.log(`[Agent] EXIT ${market.ticker}: ${signal.reason}`);
-      this.strategy.clearExitConfirmation(market.ticker);
       const exitBid = record.side === 'no' ? market.noBid : market.yesBid;
       this.pendingExits.add(market.ticker);
       try {

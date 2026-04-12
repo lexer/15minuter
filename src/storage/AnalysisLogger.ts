@@ -85,9 +85,10 @@ export class AnalysisLogger {
   }
 
   logBrtiState(brtiPrice: number | undefined, markets: BtcMarket[]): void {
-    if (brtiPrice === undefined) return;
+    // Fall back to the market's own cached BRTI price if the global feed isn't ready yet.
+    const price = brtiPrice ?? markets.find((m) => m.brtiState)?.brtiState?.currentPrice ?? 0;
     this.pendingTick.btc = {
-      currentPrice: brtiPrice,
+      currentPrice: price,
       markets: markets.map((m) => {
         const secondsLeft = Math.round(m.secondsLeft);
 
@@ -95,13 +96,13 @@ export class AnalysisLogger {
         // Settlement window (final 60s): weighted average of accumulated 1s BRTI samples
         //   and current BRTI for the remaining seconds.
         // Before settlement window: current BRTI (flat projection — if BRTI stays constant).
-        let sixtySecondsAvg = r4(brtiPrice);
-        if (m.threshold > 0 && secondsLeft <= 60 && secondsLeft > 0) {
+        let sixtySecondsAvg = r4(price);
+        if (price > 0 && m.threshold > 0 && secondsLeft <= 60 && secondsLeft > 0) {
           const elapsed    = Math.max(0, 60 - secondsLeft);
           const partialSum = m.settlementSamples.length > 0
             ? (m.settlementSamples.reduce((a, b) => a + b, 0) / m.settlementSamples.length) * elapsed
             : 0;
-          sixtySecondsAvg = r4((partialSum + secondsLeft * brtiPrice) / 60);
+          sixtySecondsAvg = r4((partialSum + secondsLeft * price) / 60);
         }
 
         const priceChangePct = m.threshold > 0

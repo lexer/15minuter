@@ -1,11 +1,11 @@
 import {
   TradingStrategy,
   ENTRY_ASK_THRESHOLD,
+  ENTRY_MAX_ASK,
   ENTRY_MIN_SECONDS,
   ENTRY_MAX_SECONDS,
-  EXIT_PROBABILITY_THRESHOLD,
   EXIT_HARD_STOP,
-  EXIT_CONFIRMATION_TICKS,
+  EXIT_TAKE_PROFIT,
   WINDOW_BUDGET_CENTS,
 } from '../../src/strategy/TradingStrategy';
 import { BtcMarket } from '../../src/services/MarketService';
@@ -88,10 +88,18 @@ describe('TradingStrategy', () => {
       expect(signal.action).toBe('hold');
     });
 
+    it('holds when ask is above 98¢ cap', () => {
+      const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.99 }), 100_000);
+      expect(signal.action).toBe('hold');
+    });
+
     it('holds when ask is 100¢', () => {
       const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 1.0 }), 100_000);
       expect(signal.action).toBe('hold');
-      expect(signal.reason).toMatch(/100¢/);
+    });
+
+    it('ENTRY_MAX_ASK constant is 98¢', () => {
+      expect(ENTRY_MAX_ASK).toBe(0.98);
     });
 
     it('holds when market is not tradeable', () => {
@@ -125,101 +133,53 @@ describe('TradingStrategy', () => {
   });
 
   describe('evaluateExit', () => {
-    it('exits immediately on hard stop — no confirmation, no probability guard', () => {
-      const market = makeMarket({ yesBid: EXIT_HARD_STOP, winProbability: 0.95 });
-      expect(strategy.evaluateExit(market, 5).action).toBe('sell');
-      expect(strategy.evaluateExit(makeMarket({ yesBid: EXIT_HARD_STOP }), 5).reason).toMatch(/Hard stop/);
-    });
-
-    it('exits immediately well below hard stop regardless of probability', () => {
-      const market = makeMarket({ yesBid: 0.50, winProbability: 0.99 });
-      expect(strategy.evaluateExit(market, 5).action).toBe('sell');
-    });
-
-    it('holds on first low-bid tick in soft zone (confirmation window)', () => {
-      const market = makeMarket({ yesBid: 0.75, winProbability: 0.65 });
+    it('take profit fires when bid reaches 99¢', () => {
+      const market = makeMarket({ yesBid: EXIT_TAKE_PROFIT });
       const signal = strategy.evaluateExit(market, 5);
-      expect(signal.action).toBe('hold');
-      expect(signal.reason).toMatch(/confirming \(1\//);
-    });
-
-    it('sells after EXIT_CONFIRMATION_TICKS consecutive low-bid ticks', () => {
-      const market = makeMarket({ yesBid: 0.75, winProbability: 0.65 });
-      for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
-        expect(strategy.evaluateExit(market, 5).action).toBe('hold');
-      }
-      expect(strategy.evaluateExit(market, 5).action).toBe('sell');
-    });
-
-    it('resets confirmation counter when bid recovers above soft threshold', () => {
-      const low  = makeMarket({ yesBid: 0.75, winProbability: 0.65 });
-      const high = makeMarket({ yesBid: 0.85, winProbability: 0.85 });
-
-      strategy.evaluateExit(low, 5);
-      strategy.evaluateExit(low, 5);
-      strategy.evaluateExit(high, 5); // recovery — resets counter
-      for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
-        expect(strategy.evaluateExit(low, 5).action).toBe('hold');
-      }
-      expect(strategy.evaluateExit(low, 5).action).toBe('sell');
-    });
-
-    it('sells in soft zone after confirmation ticks regardless of model probability', () => {
-      // Probability guard removed — bid level is the sole gate
-      const market = makeMarket({ yesBid: 0.75, winProbability: 0.95 });
-      for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
-        expect(strategy.evaluateExit(market, 5).action).toBe('hold');
-      }
-      expect(strategy.evaluateExit(market, 5).action).toBe('sell');
-    });
-
-    it('holds when bid is above exit threshold', () => {
-      expect(strategy.evaluateExit(makeMarket({ yesBid: 0.88 }), 5).action).toBe('hold');
-    });
-
-    it('suppresses soft-zone exit during liquidation cascade', () => {
-      const market = makeMarket({ yesBid: 0.75, winProbability: 0.65 });
-      // Baseline: without suppressSoftExit, sells after EXIT_CONFIRMATION_TICKS ticks
-      for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
-        expect(strategy.evaluateExit(market, 5, false).action).toBe('hold');
-      }
-      expect(strategy.evaluateExit(market, 5, false).action).toBe('sell');
-
-      // With suppressSoftExit=true: stays in hold indefinitely in soft zone
-      strategy = new TradingStrategy();
-      for (let i = 0; i < EXIT_CONFIRMATION_TICKS + 2; i++) {
-        const result = strategy.evaluateExit(market, 5, true);
-        expect(result.action).toBe('hold');
-        expect(result.reason).toMatch(/cascade/);
-      }
-    });
-
-    it('still hard-stops during liquidation cascade (suppressSoftExit does not block hard stop)', () => {
-      const market = makeMarket({ yesBid: EXIT_HARD_STOP, winProbability: 0.95 });
-      expect(strategy.evaluateExit(market, 5, true).action).toBe('sell');
-      expect(strategy.evaluateExit(market, 5, true).reason).toMatch(/Hard stop/);
-    });
-
-    it('triggers emergency exit on single-tick bid crash ≥15¢', () => {
-      // First tick establishes previous bid
-      strategy.evaluateExit(makeMarket({ yesBid: 0.92 }), 5);
-      // Second tick: bid crashes 20¢ — emergency exit
-      const signal = strategy.evaluateExit(makeMarket({ yesBid: 0.72, winProbability: 0.90 }), 5);
       expect(signal.action).toBe('sell');
-      expect(signal.reason).toMatch(/Emergency/);
+      expect(signal.reason).toMatch(/Take profit/);
+      expect(signal.suggestedLimitPrice).toBe(EXIT_TAKE_PROFIT);
     });
 
-    it('evaluates NO exit using noBid and P(NO) = 1 - winProbability', () => {
+    it('take profit fires above 99¢ threshold', () => {
+      expect(strategy.evaluateExit(makeMarket({ yesBid: 1.0 }), 5).action).toBe('sell');
+    });
+
+    it('holds at 98¢ (below take-profit threshold)', () => {
+      expect(strategy.evaluateExit(makeMarket({ yesBid: 0.98 }), 5).action).toBe('hold');
+    });
+
+    it('hard stop fires when bid equals threshold', () => {
+      const market = makeMarket({ yesBid: EXIT_HARD_STOP });
+      const signal = strategy.evaluateExit(market, 5);
+      expect(signal.action).toBe('sell');
+      expect(signal.reason).toMatch(/Hard stop/);
+    });
+
+    it('hard stop fires well below threshold regardless of probability', () => {
+      expect(strategy.evaluateExit(makeMarket({ yesBid: 0.30 }), 5).action).toBe('sell');
+    });
+
+    it('holds when bid is above hard stop threshold', () => {
+      expect(strategy.evaluateExit(makeMarket({ yesBid: 0.65 }), 5).action).toBe('hold');
+      expect(strategy.evaluateExit(makeMarket({ yesBid: 0.90 }), 5).action).toBe('hold');
+    });
+
+    it('hold reason includes model_prob for logging', () => {
+      const signal = strategy.evaluateExit(makeMarket({ yesBid: 0.90, winProbability: 0.93 }), 5);
+      expect(signal.reason).toMatch(/model_prob/);
+    });
+
+    it('evaluates NO exit using noBid', () => {
       // noBid=0.92 → above threshold → hold
-      expect(strategy.evaluateExit(makeMarket({ noBid: 0.92 }), 5, false, 'no').action).toBe('hold');
-      // noBid=0.60 → hard stop → sell
-      expect(strategy.evaluateExit(makeMarket({ noBid: 0.60 }), 5, false, 'no').action).toBe('sell');
+      expect(strategy.evaluateExit(makeMarket({ noBid: 0.92 }), 5, 'no').action).toBe('hold');
+      // noBid=0.55 → hard stop → sell
+      expect(strategy.evaluateExit(makeMarket({ noBid: 0.55 }), 5, 'no').action).toBe('sell');
     });
 
     it('NO hard stop fires using noBid regardless of yesBid', () => {
-      // yesBid is high (no YES hard stop), but noBid is below hard stop
-      const market = makeMarket({ yesBid: 0.92, noBid: 0.65, winProbability: 0.08 });
-      const signal = strategy.evaluateExit(market, 5, false, 'no');
+      const market = makeMarket({ yesBid: 0.92, noBid: 0.55, winProbability: 0.08 });
+      const signal = strategy.evaluateExit(market, 5, 'no');
       expect(signal.action).toBe('sell');
       expect(signal.reason).toMatch(/Hard stop/);
       expect(signal.side).toBe('no');

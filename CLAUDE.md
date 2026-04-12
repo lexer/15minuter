@@ -37,16 +37,14 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 1. Trade exclusively on **`KXBTC15M` Bitcoin 15-minute price-direction markets**. Exact resolution: YES if the **60-second BRTI average before close** ≥ the **60-second BRTI average before open** of the 15-minute window (`floor_strike`). Do not trade any other market type.
 2. Only trade during the **final 90 seconds** of a 15-minute window (up to and including market close). The 90-second ceiling starts 30s before the 60-second BRTI averaging window begins.
 3. **Entry** (evaluated symmetrically for both sides; IOC order; market price is the sole gate):
-   - **YES**: YES ask **> 90¢ and < 100¢** → buy YES.
-   - **NO**: NO ask **> 90¢ and < 100¢** (i.e. YES bid **< 10¢**) → buy NO.
+   - **YES**: YES ask **> 90¢ and ≤ 98¢** → buy YES.
+   - **NO**: NO ask **> 90¢ and ≤ 98¢** (i.e. YES bid **< 10¢**) → buy NO.
    - Win probability is **logged for analysis only** — it does not block entry.
    - Positions are held until bid-based exit or settlement — never force-exited by time alone.
 4. **Exit** (evaluated in priority order each tick; uses YES bid for YES positions, NO bid for NO positions):
-   - Single-tick bid crash **≥ 15¢** → sell immediately (emergency exit).
-   - **bid ≤ 70¢** → hard stop: sell immediately, no confirmation window. Caps max loss at ~20¢/contract.
-   - **70¢ < bid ≤ 80¢** → require **3 consecutive ticks** below 80¢, then sell at bid (soft zone).
-     - Exception: during a liquidation cascade (`suppressSoftExit=true`), soft-zone confirmation is suspended; hard stop still fires.
-   - **bid > 80¢** → hold.
+   - **bid ≥ 99¢** → take profit: sell immediately, locking in near-maximum gain.
+   - **bid ≤ 60¢** → hard stop: sell immediately, no confirmation window. Caps max loss at ~30¢/contract.
+   - **bid between 60¢ and 99¢** → hold.
 5. **Win probability** (`0.7 × Gaussian model + 0.3 × Kalshi market mid`) is computed every tick and written to the analysis log. It is **not used for trading decisions**.
    - Gaussian model: `Φ(priceChangeFraction / (σ_eff × √secondsLeft) + score × 1.5)`
    - `priceChangeFraction = (currentBRTI − floor_strike) / floor_strike`

@@ -92,12 +92,12 @@ Entry is evaluated symmetrically for YES and NO sides. Market ask price is the *
 
 **YES entry** (bullish):
 1. Market must be `active` or `open`; `isInTradingWindow = true` (secondsLeft ≤ 90)
-2. YES ask **> 90¢ and < 100¢** (market-implied probability ≥ 90%)
+2. YES ask **> 90¢ and ≤ 98¢** (market-implied probability ≥ 90%, capped to avoid illiquid fills at 99¢+)
 3. Size: `min($10 window budget, available cash) / yesAsk` contracts
 
 **NO entry** (bearish):
 1. Market must be `active` or `open`; `isInTradingWindow = true` (secondsLeft ≤ 90)
-2. NO ask **> 90¢ and < 100¢** (i.e. YES bid **< 10¢**; market prices NO at ≥ 90%)
+2. NO ask **> 90¢ and ≤ 98¢** (i.e. YES bid **< 10¢**; market prices NO at ≥ 90%)
 3. Size: `min($10 window budget, available cash) / noAsk` contracts
 
 No confirmation window. IOC order semantics: a momentary ask spike with no real liquidity results in an unfilled order, not a bad fill.
@@ -112,13 +112,12 @@ This ensures NO entry IOC orders use the current market price, not a stale REST-
 ### 8. Exit Criteria (evaluated in priority order each tick)
 Bid price is the sole gate — model probability is logged in reason strings but does not influence exit decisions.
 
-1. Single-tick bid crash **≥ 15¢** → emergency exit (immediate sell)
-2. **bid ≤ 70¢** → hard stop: sell immediately, no confirmation
-3. **70¢ < bid ≤ 80¢** → soft zone: require **3 consecutive ticks**, then sell at bid
-   - Exception: `suppressSoftExit=true` (liquidation cascade active) suspends soft-zone confirmation; hard stop still fires
-4. **bid > 80¢** → hold
+1. **bid ≥ 99¢** → take profit: sell immediately, locking in near-maximum gain
+2. **bid ≤ 60¢** → hard stop: sell immediately, no confirmation
+3. **60¢ < bid < 99¢** → hold
 
-Worst-case loss per contract: entry at >90¢, hard stop at 70¢ = ~20¢.
+Worst-case loss per contract: entry at ≥90¢, hard stop at 60¢ = ~30¢.
+Maximum gain per contract: entry at ≤98¢, take profit at 99¢+ = 1–9¢ (plus settlement at $1.00).
 
 Positions are never force-exited by time. Exit is triggered solely by bid price levels above, or by market settlement. Open positions continue to be evaluated on every ticker tick regardless of how much time is left.
 
@@ -142,7 +141,7 @@ All runtime files use the `btc_` prefix to avoid collisions with other agents:
 | `btc_trade_history.json` | All trade records |
 
 ### 11. Logging
-The analysis log (`btc_analysis_YYYY-MM-DD.log`) writes one JSON-lines entry per 5s tick including:
+The analysis log (`btc_analysis_YYYY-MM-DD.log`) writes one JSON-lines entry per **WebSocket ticker tick** (per-market, per-message from Kalshi WS). Entries are only written when a market is in the trading window or has an open position. Each entry includes:
 - BTC state: `currentPrice`, market snapshots for all tracked markets
 - Market snapshots: `ticker`, `targetPrice` (`floor_strike`), `sixtySecondsAvg`, `priceChangePct`, `winProbability`, `ask`, `bid`, `secondsLeft`, optional `signal`/`signalReason`
 - `sixtySecondsAvg` is **always present** (not gated on settlement window):
@@ -165,13 +164,13 @@ The analysis log (`btc_analysis_YYYY-MM-DD.log`) writes one JSON-lines entry per
 
 [on WS ticker message]
   applyTickerUpdate() → recompute secondsLeft + blended prob
-  if open position OR isInTradingWindow: handleMarket()
+  if open position OR isInTradingWindow:
+    startTick → logBrtiState([market]) → handleMarket() → logOpenPositions → finalizeTick
+    (one analysis log entry per WS tick per qualifying market)
 
 [every 5s — btcStateLoop]
   BRTI: refreshBtcStates()
-  for each trading-window market: handleMarket()
-  for each open position outside window: handleMarket() (exit only)
-  write btc_analysis tick
+  log console status only (no analysis write)
 
 [every 30s — marketDiscoveryLoop]
   REST: discoverMarkets() → WS subscribe/unsubscribe

@@ -2,13 +2,15 @@ import { BtcMarket } from '../services/MarketService';
 
 // ── Entry thresholds ─────────────────────────────────────────────────────────
 export const ENTRY_ASK_THRESHOLD  = 0.9;   // ask must exceed this to enter (YES or NO side)
+export const ENTRY_MAX_ASK        = 0.98;  // ask must not exceed this (avoid 99¢+ illiquid fills)
 export const ENTRY_MIN_SECONDS    = 0;     // enter right up to market close
 export const ENTRY_MAX_SECONDS    = 90;    // enter up to 90s before close
+
 // ── Exit thresholds ──────────────────────────────────────────────────────────
-export const EXIT_PROBABILITY_THRESHOLD = 0.8;  // bid ≤ this triggers soft-exit zone
-export const EXIT_HARD_STOP             = 0.7;  // bid ≤ this → immediate exit, no guard
-export const EXIT_CONFIRMATION_TICKS    = 3;    // consecutive soft-zone ticks before selling
-export const EXIT_EMERGENCY_DROP        = 0.15; // single-tick bid crash → immediate exit
+/** Take-profit: bid ≥ 99¢ → sell immediately, locking in near-maximum gain. */
+export const EXIT_TAKE_PROFIT = 0.99;
+/** Hard stop: bid ≤ 60¢ → sell immediately. Caps max loss at ~30¢/contract. */
+export const EXIT_HARD_STOP = 0.6;
 
 // ── Sizing ───────────────────────────────────────────────────────────────────
 /** Maximum spend per 15-minute window: $10. */
@@ -26,16 +28,8 @@ export interface TradeSignal {
 }
 
 export class TradingStrategy {
-  private readonly lowBidCounts = new Map<string, number>(); // soft-exit confirmation
-  private readonly previousBids = new Map<string, number>(); // emergency exit tracking
-
   private isTradeable(status: string): boolean {
     return status === 'open' || status === 'active';
-  }
-
-  clearExitConfirmation(ticker: string): void {
-    this.lowBidCounts.delete(ticker);
-    this.previousBids.delete(ticker);
   }
 
   evaluateEntry(market: BtcMarket, availableBalanceCents: number): TradeSignal {
@@ -54,7 +48,7 @@ export class TradingStrategy {
     const maxSpendCents = Math.min(WINDOW_BUDGET_CENTS, availableBalanceCents);
 
     // YES entry: market-implied probability ≥ 90¢ ask (win probability logged for analysis only)
-    if (market.yesAsk > ENTRY_ASK_THRESHOLD && market.yesAsk < 1.0) {
+    if (market.yesAsk > ENTRY_ASK_THRESHOLD && market.yesAsk <= ENTRY_MAX_ASK) {
       const costCents = Math.round(market.yesAsk * 100);
       const contracts = Math.floor(maxSpendCents / costCents);
       if (contracts > 0) {
@@ -72,7 +66,7 @@ export class TradingStrategy {
     }
 
     // NO entry: market-implied NO probability ≥ 90¢ ask (YES bid < 10¢)
-    if (market.noAsk > ENTRY_ASK_THRESHOLD && market.noAsk < 1.0) {
+    if (market.noAsk > ENTRY_ASK_THRESHOLD && market.noAsk <= ENTRY_MAX_ASK) {
       const costCents = Math.round(market.noAsk * 100);
       const contracts = Math.floor(maxSpendCents / costCents);
       if (contracts > 0) {
@@ -97,35 +91,25 @@ export class TradingStrategy {
   }
 
   /**
-   * @param suppressSoftExit - When true (liquidation cascade active), soft-zone
-   *   confirmation exits are suspended. Hard stops and emergency exits still fire.
-   * @param side - Which side we are holding. Defaults to 'yes'.
-   *   For NO positions, uses noBid instead of yesBid.
+   * Single exit rule: hard stop when bid ≤ 60¢, hold otherwise.
+   * Uses YES bid for YES positions, NO bid (= 1 − yesAsk) for NO positions.
    */
-  evaluateExit(market: BtcMarket, heldContracts: number, suppressSoftExit = false, side: 'yes' | 'no' = 'yes'): TradeSignal {
+  evaluateExit(market: BtcMarket, heldContracts: number, side: 'yes' | 'no' = 'yes'): TradeSignal {
     const bid     = side === 'yes' ? market.yesBid : market.noBid;
     const sideStr = side.toUpperCase();
 
-    // Emergency exit: single-tick bid crash ≥15¢ → sell immediately
-    const prevBid = this.previousBids.get(market.ticker);
-    this.previousBids.set(market.ticker, bid);
-    if (prevBid !== undefined && prevBid - bid >= EXIT_EMERGENCY_DROP) {
-      this.lowBidCounts.delete(market.ticker);
-      this.previousBids.delete(market.ticker);
+    if (bid >= EXIT_TAKE_PROFIT) {
       return {
         action: 'sell',
         side,
-        reason: `Emergency exit: ${sideStr} bid crashed ${(prevBid * 100).toFixed(0)}¢→${(bid * 100).toFixed(0)}¢ (${((prevBid - bid) * 100).toFixed(0)}¢ drop in one tick)`,
+        reason: `Take profit: ${sideStr} bid ${(bid * 100).toFixed(0)}¢ ≥ ${EXIT_TAKE_PROFIT * 100}¢ — locking in gain`,
         market,
         suggestedContracts:  heldContracts,
-        suggestedLimitPrice: bid > 0 ? bid : 0,
+        suggestedLimitPrice: bid,
       };
     }
 
-    // Hard stop: bid ≤ 70¢ — exit immediately, no guard, no confirmation window
     if (bid <= EXIT_HARD_STOP) {
-      this.lowBidCounts.delete(market.ticker);
-      this.previousBids.delete(market.ticker);
       return {
         action: 'sell',
         side,
@@ -136,44 +120,9 @@ export class TradingStrategy {
       };
     }
 
-    if (bid <= EXIT_PROBABILITY_THRESHOLD) {
-      // During a liquidation cascade: suspend soft-zone confirmation to avoid panic sells.
-      // Hard stop (above) and emergency exit (above) still fire as safety nets.
-      if (suppressSoftExit) {
-        this.lowBidCounts.delete(market.ticker);
-        return {
-          action: 'hold',
-          reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone — suspended during liquidation cascade`,
-          market,
-        };
-      }
-
-      const count = (this.lowBidCounts.get(market.ticker) ?? 0) + 1;
-      this.lowBidCounts.set(market.ticker, count);
-      if (count < EXIT_CONFIRMATION_TICKS) {
-        return {
-          action: 'hold',
-          reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone — confirming (${count}/${EXIT_CONFIRMATION_TICKS}) model_prob=${(market.winProbability * 100).toFixed(1)}%`,
-          market,
-        };
-      }
-
-      this.lowBidCounts.delete(market.ticker);
-      return {
-        action: 'sell',
-        side,
-        reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone for ${EXIT_CONFIRMATION_TICKS} ticks`,
-        market,
-        suggestedContracts:  heldContracts,
-        suggestedLimitPrice: bid > 0 ? bid : 0,
-      };
-    }
-
-    // Bid recovered — reset counter
-    this.lowBidCounts.delete(market.ticker);
     return {
       action: 'hold',
-      reason: `Hold — ${sideStr} bid ${(bid * 100).toFixed(0)}¢ above exit threshold`,
+      reason: `Hold — ${sideStr} bid ${(bid * 100).toFixed(0)}¢ above ${EXIT_HARD_STOP * 100}¢ threshold model_prob=${(market.winProbability * 100).toFixed(1)}%`,
       market,
     };
   }

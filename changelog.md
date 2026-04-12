@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.29.0] — 2026-04-12
+
+### Changed
+- **Entry cap at 98¢**: added `ENTRY_MAX_ASK = 0.98`; entry now requires `90¢ < ask ≤ 98¢` for both YES and NO sides. Avoids illiquid fills at 99¢+ where max win is ≤ 1¢/contract.
+- **Take-profit exit at 99¢**: added `EXIT_TAKE_PROFIT = 0.99`; if bid ≥ 99¢, sell immediately to lock in near-maximum gain before settlement.
+- **Simplified exit — hard stop at 60¢**: removed emergency exit (single-tick crash ≥ 15¢) and soft zone (3-tick confirmation at 70–80¢). Single hard stop: bid ≤ 60¢ → sell. Removed `EXIT_EMERGENCY_DROP`, `EXIT_PROBABILITY_THRESHOLD`, `EXIT_CONFIRMATION_TICKS`, `EXIT_PROBABILITY_GUARD`, `EXIT_SOFT_ZONE_LOWER`, `EXIT_SOFT_ZONE_UPPER` constants. `TradingStrategy` is now stateless (no `lowBidCounts`/`previousBids` maps).
+- **Analysis log at WS-tick resolution**: `TradingAgent.onTicker()` now writes one analysis log entry per Kalshi WS ticker message (per qualifying market). Previously logged every 5 seconds from `btcStateLoop`. `btcStateLoop` now only refreshes BRTI state and logs a console status line.
+- **`AnalysisLogger.logBrtiState`**: accepts `brtiPrice: number | undefined`; falls back to cached `brtiState.currentPrice` from the market if the BRTI feed hasn't initialized yet.
+
+### Tests
+- `TradingStrategy.test.ts`: added 98¢ cap tests; replaced multi-rule exit tests with take-profit and hard-stop-only tests; imported `ENTRY_MAX_ASK`, `EXIT_TAKE_PROFIT`.
+
 ## [1.28.0] — 2026-04-11
 
 ### Fixed
