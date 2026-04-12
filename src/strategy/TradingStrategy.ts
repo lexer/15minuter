@@ -59,8 +59,8 @@ export class TradingStrategy {
 
     const maxSpendCents = Math.min(WINDOW_BUDGET_CENTS, availableBalanceCents);
 
-    // YES entry: win probability ≥ 90% (YES ask > 90¢)
-    if (market.yesAsk > ENTRY_ASK_THRESHOLD && market.yesAsk < 1.0) {
+    // YES entry: model win probability ≥ 90% AND market ask > 90¢
+    if (market.winProbability >= (1 - ENTRY_NO_WIN_THRESHOLD) && market.yesAsk > ENTRY_ASK_THRESHOLD && market.yesAsk < 1.0) {
       const costCents = Math.round(market.yesAsk * 100);
       const contracts = Math.floor(maxSpendCents / costCents);
       if (contracts > 0) {
@@ -69,7 +69,7 @@ export class TradingStrategy {
         return {
           action: 'buy',
           side:   'yes',
-          reason: `YES ask=${(market.yesAsk * 100).toFixed(0)}¢ | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
+          reason: `YES ask=${(market.yesAsk * 100).toFixed(0)}¢ P(YES)=${(market.winProbability * 100).toFixed(1)}% | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
           market,
           suggestedContracts:  contracts,
           suggestedLimitPrice: market.yesAsk,
@@ -77,7 +77,7 @@ export class TradingStrategy {
       }
     }
 
-    // NO entry: win probability ≤ 10% (NO ask > 90¢, i.e. YES bid < 10¢)
+    // NO entry: model win probability ≤ 10% AND market NO ask > 90¢
     if (market.winProbability <= ENTRY_NO_WIN_THRESHOLD && market.noAsk > ENTRY_ASK_THRESHOLD && market.noAsk < 1.0) {
       const costCents = Math.round(market.noAsk * 100);
       const contracts = Math.floor(maxSpendCents / costCents);
@@ -87,7 +87,7 @@ export class TradingStrategy {
         return {
           action: 'buy',
           side:   'no',
-          reason: `NO ask=${(market.noAsk * 100).toFixed(0)}¢ (P(NO)=${((1 - market.winProbability) * 100).toFixed(1)}%) | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
+          reason: `NO ask=${(market.noAsk * 100).toFixed(0)}¢ P(NO)=${((1 - market.winProbability) * 100).toFixed(1)}% | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
           market,
           suggestedContracts:  contracts,
           suggestedLimitPrice: market.noAsk,

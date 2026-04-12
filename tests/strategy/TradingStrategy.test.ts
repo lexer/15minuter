@@ -41,12 +41,19 @@ describe('TradingStrategy', () => {
   });
 
   describe('evaluateEntry', () => {
-    it('returns YES buy when YES ask exceeds threshold', () => {
-      const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94 }), 100_000);
+    it('returns YES buy when YES ask exceeds threshold AND win probability ≥ 90%', () => {
+      // winProbability=0.93 (default), yesAsk=0.94 → qualifies
+      const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94, winProbability: 0.93 }), 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.side).toBe('yes');
       expect(signal.suggestedContracts).toBeGreaterThan(0);
       expect(signal.suggestedLimitPrice).toBe(0.94);
+    });
+
+    it('holds when YES ask > 90¢ but model win probability < 90%', () => {
+      // Market prices YES at 94¢ but our model only gives 80% — skip
+      const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94, winProbability: 0.80 }), 100_000);
+      expect(signal.action).toBe('hold');
     });
 
     it('returns NO buy when win probability is ≤ 10% and NO ask > 90¢', () => {
