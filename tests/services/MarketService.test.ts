@@ -60,10 +60,11 @@ describe('MarketService', () => {
       expect(m.isInTradingWindow).toBe(false);
     });
 
-    it('marks market outside window when secondsLeft < min', async () => {
+    it('marks market in window when secondsLeft is 0 (no minimum floor)', async () => {
+      // TRADING_WINDOW_MIN_SECONDS = 0: strategy runs right up to market close
       const svc = new MarketService(makeClient([makeRawMarket(TICKER_80K, 2)]) as never, makeMonitor(BRTI_STATE) as never);
       const [m] = await svc.getAllLiveBtcMarkets();
-      expect(m.isInTradingWindow).toBe(false);
+      expect(m.isInTradingWindow).toBe(true);
     });
   });
 

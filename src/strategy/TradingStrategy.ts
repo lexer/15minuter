@@ -2,7 +2,7 @@ import { BtcMarket } from '../services/MarketService';
 
 // ── Entry thresholds ─────────────────────────────────────────────────────────
 export const ENTRY_ASK_THRESHOLD  = 0.9;   // ask must exceed this to enter (YES or NO side)
-export const ENTRY_MIN_SECONDS    = 5;     // enter no closer than 5s to close (IOC buffer)
+export const ENTRY_MIN_SECONDS    = 0;     // enter right up to market close
 export const ENTRY_MAX_SECONDS    = 90;    // enter up to 90s before close
 // ── Exit thresholds ──────────────────────────────────────────────────────────
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;  // bid ≤ this triggers soft-exit zone

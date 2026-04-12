@@ -5,9 +5,8 @@ import { BtcPriceMonitor, BrtiState } from './BtcPriceMonitor';
 import { BtcProbabilityModel } from './BtcProbabilityModel';
 
 // Enter in the final 90 seconds — 30s before the 60-second BRTI averaging window begins.
-// This gives earlier signal capture while still keeping time-to-close tight.
-// A 5-second floor ensures there is time for an IOC order to execute.
-export const TRADING_WINDOW_MIN_SECONDS = 5;
+// No minimum floor: strategy evaluates entries and exits right up to market close.
+export const TRADING_WINDOW_MIN_SECONDS = 0;
 export const TRADING_WINDOW_MAX_SECONDS = 90;
 
 // 30% market mid, 70% BTC Gaussian model — market mid captures flow from larger participants

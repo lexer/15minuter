@@ -35,11 +35,12 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 ## Trading Strategy
 
 1. Trade exclusively on **`KXBTC15M` Bitcoin 15-minute price-direction markets**. Exact resolution: YES if the **60-second BRTI average before close** ≥ the **60-second BRTI average before open** of the 15-minute window (`floor_strike`). Do not trade any other market type.
-2. Only trade during the **final 5–90 seconds** of a 15-minute window. The 90-second ceiling starts 30s before the 60-second BRTI averaging window begins; the 5-second floor ensures an IOC order has time to execute.
+2. Only trade during the **final 90 seconds** of a 15-minute window (up to and including market close). The 90-second ceiling starts 30s before the 60-second BRTI averaging window begins.
 3. **Entry** (evaluated symmetrically for both sides; IOC order; market price is the sole gate):
    - **YES**: YES ask **> 90¢ and < 100¢** → buy YES.
    - **NO**: NO ask **> 90¢ and < 100¢** (i.e. YES bid **< 10¢**) → buy NO.
    - Win probability is **logged for analysis only** — it does not block entry.
+   - Positions are held until bid-based exit or settlement — never force-exited by time alone.
 4. **Exit** (evaluated in priority order each tick; uses YES bid for YES positions, NO bid for NO positions):
    - Single-tick bid crash **≥ 15¢** → sell immediately (emergency exit).
    - **bid ≤ 70¢** → hard stop: sell immediately, no confirmation window. Caps max loss at ~20¢/contract.

@@ -81,22 +81,22 @@ winProbability = 0.3 × marketMid + 0.7 × btcGaussianModel
 Computed every tick and written to the analysis log. **Not used for trading decisions** — entry and exit are gated solely on market ask/bid price levels. The model was removed from the decision path because momentum and market-mid blending produced inflated estimates (e.g. 91.9% from a +0.016% price lead), causing premature entries and blocking valid exits.
 
 ### 6. Trading Window — Entry and Market Discovery
-Only trade in the final **5–90 seconds** of each 15-minute window:
+Only trade in the final **90 seconds** of each 15-minute window (up to and including market close):
 - The 90-second ceiling starts 30 seconds before the 60-second BRTI averaging window begins, capturing early directional price information.
-- The 5-second floor ensures an IOC order has time to execute before market close.
+- No minimum floor: entries and exit management continue right up to market close.
 
-`isInTradingWindow = secondsLeft ∈ [5, 90]` is computed from `market.closeTime - Date.now()`.
+`isInTradingWindow = secondsLeft ∈ [0, 90]` is computed from `market.closeTime - Date.now()`.
 
 ### 7. Entry Criteria
 Entry is evaluated symmetrically for YES and NO sides. Market ask price is the **sole gate** — model probability is logged but does not influence entry.
 
 **YES entry** (bullish):
-1. Market must be `active` or `open`; `isInTradingWindow = true`
+1. Market must be `active` or `open`; `isInTradingWindow = true` (secondsLeft ≤ 90)
 2. YES ask **> 90¢ and < 100¢** (market-implied probability ≥ 90%)
 3. Size: `min($10 window budget, available cash) / yesAsk` contracts
 
 **NO entry** (bearish):
-1. Market must be `active` or `open`; `isInTradingWindow = true`
+1. Market must be `active` or `open`; `isInTradingWindow = true` (secondsLeft ≤ 90)
 2. NO ask **> 90¢ and < 100¢** (i.e. YES bid **< 10¢**; market prices NO at ≥ 90%)
 3. Size: `min($10 window budget, available cash) / noAsk` contracts
 
@@ -120,7 +120,7 @@ Bid price is the sole gate — model probability is logged in reason strings but
 
 Worst-case loss per contract: entry at >90¢, hard stop at 70¢ = ~20¢.
 
-Also exits open positions that fall outside the trading window (e.g., a position is still managed for exit after `secondsLeft < 5` or when the market settles).
+Positions are never force-exited by time. Exit is triggered solely by bid price levels above, or by market settlement. Open positions continue to be evaluated on every ticker tick regardless of how much time is left.
 
 ### 9. Position Sizing — Window Budget
 Budget = **$10 per 15-minute window** (constant, not derived from account balance).
