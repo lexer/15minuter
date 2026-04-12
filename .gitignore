@@ -13,3 +13,11 @@ analysis_*.log
 errors.log
 .DS_Store
 **/.DS_Store
+# BTC agent runtime files
+btc_agent.pid
+btc_agent_*.log
+btc_errors.log
+btc_trade_history.json
+btc_analysis_*.log
+# Analysis logs (per-window per-ticker)
+logs/

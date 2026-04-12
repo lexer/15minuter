@@ -66,7 +66,7 @@ This agent uses dedicated file names to avoid conflicts with other agents runnin
 | `btc_agent.pid` | Single-instance PID lock |
 | `btc_agent_YYYY-MM-DD.log` | Agent stdout |
 | `btc_errors.log` | Error log |
-| `btc_analysis_YYYY-MM-DD.log` | Per-tick analysis |
+| `logs/analysis/YYYY-MM-DD_HH-MM/<ticker>.log` | Per-tick analysis (one file per ticker per 15-min window) |
 | `btc_trade_history.json` | Trade records |
 
 ---

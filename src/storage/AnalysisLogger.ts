@@ -64,16 +64,21 @@ export interface PositionAnalysis {
   unrealizedPnl?: number;
 }
 
-function pstDateString(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-}
+const WINDOW_MS = 15 * 60 * 1_000; // 15-minute window size
 
-function dailyLogPath(): string {
-  return path.resolve(process.cwd(), `btc_analysis_${pstDateString()}.log`);
+function windowDir(windowEndMs: number): string {
+  const d       = new Date(windowEndMs);
+  const dateStr = d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  const timeStr = d.toLocaleTimeString('en-GB', { timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit', hour12: false }).replace(':', '-');
+  return path.resolve(process.cwd(), 'logs', 'analysis', `${dateStr}_${timeStr}`);
 }
 
 export class AnalysisLogger {
-  private pendingTick: Partial<TickAnalysis> = {};
+  private pendingTick:   Partial<TickAnalysis> = {};
+  private pendingTicker: string                = '';
+  /** Cache dir path per window to avoid repeated mkdirSync. */
+  private cachedWindowEnd: number = 0;
+  private cachedDir:       string = '';
 
   startTick(balanceCents: number): void {
     this.pendingTick = {
@@ -85,6 +90,8 @@ export class AnalysisLogger {
   }
 
   logBrtiState(brtiPrice: number | undefined, markets: BtcMarket[]): void {
+    // Capture ticker for per-ticker file routing in finalizeTick.
+    if (markets.length > 0) this.pendingTicker = markets[0].ticker;
     // Fall back to the market's own cached BRTI price if the global feed isn't ready yet.
     const price = brtiPrice ?? markets.find((m) => m.brtiState)?.brtiState?.currentPrice ?? 0;
     this.pendingTick.btc = {
@@ -170,6 +177,17 @@ export class AnalysisLogger {
     });
   }
 
+  private resolveLogPath(): string {
+    const windowEndMs = Math.ceil(Date.now() / WINDOW_MS) * WINDOW_MS;
+    if (windowEndMs !== this.cachedWindowEnd) {
+      this.cachedDir      = windowDir(windowEndMs);
+      this.cachedWindowEnd = windowEndMs;
+      fs.mkdirSync(this.cachedDir, { recursive: true });
+    }
+    const ticker = this.pendingTicker || 'unknown';
+    return path.join(this.cachedDir, `${ticker}.log`);
+  }
+
   finalizeTick(
     summary: { totalTrades: number; realizedPnl: number; winRate: number },
     unrealizedPnl: number,
@@ -198,7 +216,8 @@ export class AnalysisLogger {
     if (decisions.length > 0)    tick.decisions     = decisions;
     if (openPositions.length > 0) tick.openPositions = openPositions;
 
-    fs.appendFile(dailyLogPath(), JSON.stringify(tick) + '\n', 'utf-8', (err) => {
+    const logPath = this.resolveLogPath();
+    fs.appendFile(logPath, JSON.stringify(tick) + '\n', 'utf-8', (err) => {
       if (err) process.stderr.write(`[AnalysisLogger] Failed to write tick: ${err.message}\n`);
     });
     this.pendingTick = {};
