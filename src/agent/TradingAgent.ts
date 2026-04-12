@@ -143,7 +143,11 @@ export class TradingAgent {
 
   // ── Periodic background loops ────────────────────────────────────────────────
 
-  /** Re-fetch BTC price → update window state + probabilities → evaluate markets. */
+  /**
+   * Refresh BRTI price + settlement samples every 5s.
+   * Trade evaluation is driven exclusively by onTicker (WS bid/ask updates).
+   * This loop only handles what WS can't: BRTI state, analysis logging, and status.
+   */
   private async btcStateLoop(): Promise<void> {
     if (!this.running) return;
     try {
@@ -164,26 +168,10 @@ export class TradingAgent {
       const marketMap = new Map(this.markets.getCachedMarkets().map((m) => [m.ticker, m]));
       this.analysis.logOpenPositions(openTrades, marketMap);
 
-      // Evaluate markets in the trading window (entry + exit)
-      for (const market of tradingWindowMarkets) {
-        await this.handleMarket(market);
-      }
-
-      // Also manage exit for open positions outside the entry window
-      for (const trade of openTrades) {
-        const market = marketMap.get(trade.ticker);
-        if (market && !market.isInTradingWindow) {
-          await this.handleMarket(market);
-        }
-      }
-
-      const currentOpenTrades = this.history.getOpenTrades();
-      const unrealizedPnl     = this.computeUnrealizedPnl(currentOpenTrades);
+      const unrealizedPnl = this.computeUnrealizedPnl(openTrades);
       this.logSummary(this.history.getSummary(), unrealizedPnl);
 
-      const hasOpen   = currentOpenTrades.length > 0;
-      const hasWindow = tradingWindowMarkets.length > 0;
-      if (hasOpen || hasWindow || brtiState) {
+      if (openTrades.length > 0 || tradingWindowMarkets.length > 0 || brtiState) {
         this.analysis.finalizeTick(this.history.getSummary(), unrealizedPnl);
       }
     } catch (err) {
