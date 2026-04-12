@@ -90,36 +90,34 @@ export class AnalysisLogger {
       currentPrice: brtiPrice,
       markets: markets.map((m) => {
         const secondsLeft = Math.round(m.secondsLeft);
-        const snapshot: MarketSnapshot = {
-          ticker:          m.ticker,
-          targetPrice:     m.threshold,
-          priceChangePct:  m.threshold > 0 ? r4((brtiPrice - m.threshold) / m.threshold * 100) : 0,
-          sixtySecondsAvg: r4(brtiPrice),
-          winProbability:  r4(m.winProbability),
-          ask:             m.yesAsk,
-          bid:             m.yesBid,
-          secondsLeft,
-        };
 
         // Projected 60-second closing average (the actual resolution determinant).
         // Settlement window (final 60s): weighted average of accumulated 1s BRTI samples
         //   and current BRTI for the remaining seconds.
         // Before settlement window: current BRTI (flat projection — if BRTI stays constant).
-        // priceChangePct always uses this vs targetPrice.
-        if (m.threshold > 0) {
-          if (secondsLeft <= 60 && secondsLeft > 0) {
-            const elapsed    = Math.max(0, 60 - secondsLeft);
-            const partialSum = m.settlementSamples.length > 0
-              ? (m.settlementSamples.reduce((a, b) => a + b, 0) / m.settlementSamples.length) * elapsed
-              : 0;
-            snapshot.sixtySecondsAvg = r4((partialSum + secondsLeft * brtiPrice) / 60);
-          } else {
-            snapshot.sixtySecondsAvg = r4(brtiPrice);
-          }
-          snapshot.priceChangePct = r4((snapshot.sixtySecondsAvg - m.threshold) / m.threshold * 100);
+        let sixtySecondsAvg = r4(brtiPrice);
+        if (m.threshold > 0 && secondsLeft <= 60 && secondsLeft > 0) {
+          const elapsed    = Math.max(0, 60 - secondsLeft);
+          const partialSum = m.settlementSamples.length > 0
+            ? (m.settlementSamples.reduce((a, b) => a + b, 0) / m.settlementSamples.length) * elapsed
+            : 0;
+          sixtySecondsAvg = r4((partialSum + secondsLeft * brtiPrice) / 60);
         }
 
-        return snapshot;
+        const priceChangePct = m.threshold > 0
+          ? r4((sixtySecondsAvg - m.threshold) / m.threshold * 100)
+          : 0;
+
+        return {
+          ticker:          m.ticker,
+          targetPrice:     m.threshold,
+          priceChangePct,
+          sixtySecondsAvg,
+          winProbability:  r4(m.winProbability),
+          ask:             m.yesAsk,
+          bid:             m.yesBid,
+          secondsLeft,
+        };
       }),
     };
   }
