@@ -11,3 +11,5 @@ analysis_*.log
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 errors.log
+.DS_Store
+**/.DS_Store
