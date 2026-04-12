@@ -32,6 +32,10 @@ export class TradingAgent {
   // ── Fill price tracking ──────────────────────────────────────────────────────
   private readonly fillAccumulator = new Map<string, { totalCost: number; filledContracts: number }>();
   private readonly orderTradeMap   = new Map<string, { tradeId: string; limitPrice: number; filledContracts: number }>();
+  /** Prevent concurrent top-up orders for the same ticker (onTicker + btcStateLoop race). */
+  private readonly pendingTopUps   = new Set<string>();
+  /** Prevent concurrent exit orders for the same ticker (onTicker + btcStateLoop race). */
+  private readonly pendingExits    = new Set<string>();
 
   constructor(
     private readonly ws:                  KalshiWebSocket,
@@ -262,36 +266,49 @@ export class TradingAgent {
     const signal    = this.strategy.evaluateExit(market, record.contracts, isCascade, record.side);
 
     if (signal.action === 'sell') {
+      if (this.pendingExits.has(market.ticker)) return;
       console.log(`[Agent] EXIT ${market.ticker}: ${signal.reason}`);
       this.strategy.clearExitConfirmation(market.ticker);
       const exitBid = record.side === 'no' ? market.noBid : market.yesBid;
-      const fill = await this.executeExit(record, market, signal.suggestedLimitPrice ?? exitBid);
-      this.analysis.logDecision({
-        type: 'exit', ticker: market.ticker, reason: signal.reason,
-        contracts: record.contracts, filledContracts: fill?.filledCount,
-        fillStatus: fill === undefined ? 'unfilled'
-          : fill.filledCount >= record.contracts ? 'filled'
-          : fill.filledCount > 0 ? 'partial' : 'unfilled',
-        price: signal.suggestedLimitPrice ?? market.yesBid,
-        orderId: fill?.orderId,
-      });
+      this.pendingExits.add(market.ticker);
+      try {
+        const fill = await this.executeExit(record, market, signal.suggestedLimitPrice ?? exitBid);
+        this.analysis.logDecision({
+          type: 'exit', ticker: market.ticker, reason: signal.reason,
+          contracts: record.contracts, filledContracts: fill?.filledCount,
+          fillStatus: fill === undefined ? 'unfilled'
+            : fill.filledCount >= record.contracts ? 'filled'
+            : fill.filledCount > 0 ? 'partial' : 'unfilled',
+          price: signal.suggestedLimitPrice ?? market.yesBid,
+          orderId: fill?.orderId,
+        });
+      } finally {
+        this.pendingExits.delete(market.ticker);
+      }
     } else {
       console.log(`[Agent] HOLD ${market.ticker} @ prob=${(market.winProbability * 100).toFixed(1)}%`);
       this.analysis.logDecision({ type: 'hold', ticker: market.ticker, reason: signal.reason });
 
       // Top-up if position is below window budget limit
-      const topUp = this.strategy.evaluateTopUp(market, record.contracts, this.cachedBalanceCents, record.side);
-      if (topUp.contracts > 0) {
-        const topUpPrice = record.side === 'no' ? market.noAsk : market.yesAsk;
-        console.log(`[Agent] TOP-UP ${market.ticker}: ${topUp.reason}`);
-        const fill = await this.executeTopUp(record, market, topUp.contracts, topUpPrice);
-        this.analysis.logDecision({
-          type: 'entry', ticker: market.ticker, reason: `Top-up: ${topUp.reason}`,
-          contracts: topUp.contracts, filledContracts: fill?.filledCount,
-          fillStatus: fill === undefined || fill.filledCount === 0 ? 'unfilled'
-            : fill.filledCount >= topUp.contracts ? 'filled' : 'partial',
-          price: market.yesAsk, orderId: fill?.orderId,
-        });
+      if (!this.pendingTopUps.has(market.ticker)) {
+        const topUp = this.strategy.evaluateTopUp(market, record.contracts, this.cachedBalanceCents, record.side);
+        if (topUp.contracts > 0) {
+          const topUpPrice = record.side === 'no' ? market.noAsk : market.yesAsk;
+          console.log(`[Agent] TOP-UP ${market.ticker}: ${topUp.reason}`);
+          this.pendingTopUps.add(market.ticker);
+          try {
+            const fill = await this.executeTopUp(record, market, topUp.contracts, topUpPrice);
+            this.analysis.logDecision({
+              type: 'entry', ticker: market.ticker, reason: `Top-up: ${topUp.reason}`,
+              contracts: topUp.contracts, filledContracts: fill?.filledCount,
+              fillStatus: fill === undefined || fill.filledCount === 0 ? 'unfilled'
+                : fill.filledCount >= topUp.contracts ? 'filled' : 'partial',
+              price: market.yesAsk, orderId: fill?.orderId,
+            });
+          } finally {
+            this.pendingTopUps.delete(market.ticker);
+          }
+        }
       }
     }
   }
