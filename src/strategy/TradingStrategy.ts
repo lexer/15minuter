@@ -142,7 +142,7 @@ export class TradingStrategy {
     }
 
     const ask = side === 'yes' ? market.yesAsk : market.noAsk;
-    if (ask <= ENTRY_ASK_THRESHOLD || ask >= 1.0) {
+    if (ask <= ENTRY_ASK_THRESHOLD || ask > ENTRY_MAX_ASK) {
       return { contracts: 0, reason: `${side.toUpperCase()} ask ${(ask * 100).toFixed(0)}¢ outside entry range` };
     }
 

@@ -149,10 +149,13 @@ export class AnalysisLogger {
 
   logOpenPositions(trades: TradeRecord[], markets: Map<string, BtcMarket>): void {
     this.pendingTick.openPositions = trades.map((t) => {
-      const market        = markets.get(t.ticker);
-      const currentProb   = market?.winProbability !== undefined ? r4(market.winProbability) : undefined;
-      const unrealizedPnl = currentProb !== undefined
-        ? Math.round((currentProb - t.pricePerContract) * t.contracts * 100) / 100
+      const market      = markets.get(t.ticker);
+      const currentProb = market?.winProbability !== undefined ? r4(market.winProbability) : undefined;
+      const currentBid  = market
+        ? (t.side === 'no' ? market.noBid : market.yesBid)
+        : undefined;
+      const unrealizedPnl = currentBid !== undefined
+        ? Math.round((currentBid - t.pricePerContract) * t.contracts * 100) / 100
         : undefined;
       return {
         ticker:       t.ticker,
@@ -161,7 +164,7 @@ export class AnalysisLogger {
         entryProb:    r4(t.winProbabilityAtEntry),
         entryTime:    t.entryTime,
         currentProb,
-        bid:          market?.yesBid,
+        bid:          currentBid,
         unrealizedPnl,
       };
     });

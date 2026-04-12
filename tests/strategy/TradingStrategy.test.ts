@@ -207,6 +207,7 @@ describe('TradingStrategy', () => {
 
     it('returns 0 when ask is out of range', () => {
       expect(strategy.evaluateTopUp(makeMarket({ yesAsk: 0.85 }), 0, 100_000).contracts).toBe(0);
+      expect(strategy.evaluateTopUp(makeMarket({ yesAsk: 0.99 }), 0, 100_000).contracts).toBe(0);
       expect(strategy.evaluateTopUp(makeMarket({ yesAsk: 1.0  }), 0, 100_000).contracts).toBe(0);
     });
 

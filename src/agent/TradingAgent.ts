@@ -298,7 +298,7 @@ export class TradingAgent {
               contracts: topUp.contracts, filledContracts: fill?.filledCount,
               fillStatus: fill === undefined || fill.filledCount === 0 ? 'unfilled'
                 : fill.filledCount >= topUp.contracts ? 'filled' : 'partial',
-              price: market.yesAsk, orderId: fill?.orderId,
+              price: topUpPrice, orderId: fill?.orderId,
             });
           } finally {
             this.pendingTopUps.delete(market.ticker);
