@@ -7,12 +7,9 @@ export const ENTRY_MAX_SECONDS    = 90;    // enter up to 90s before close
 // Win probability thresholds for side selection:
 //   winProb > 1 - ENTRY_NO_WIN_THRESHOLD (= 0.9) → buy YES
 //   winProb < ENTRY_NO_WIN_THRESHOLD      (= 0.1) → buy NO
-export const ENTRY_NO_WIN_THRESHOLD = 0.10;
-
 // ── Exit thresholds ──────────────────────────────────────────────────────────
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;  // bid ≤ this triggers soft-exit zone
 export const EXIT_HARD_STOP             = 0.7;  // bid ≤ this → immediate exit, no guard
-export const EXIT_PROBABILITY_GUARD     = 0.85; // suppress soft exit if model prob ≥ this
 export const EXIT_CONFIRMATION_TICKS    = 3;    // consecutive soft-zone ticks before selling
 export const EXIT_EMERGENCY_DROP        = 0.15; // single-tick bid crash → immediate exit
 
@@ -59,8 +56,8 @@ export class TradingStrategy {
 
     const maxSpendCents = Math.min(WINDOW_BUDGET_CENTS, availableBalanceCents);
 
-    // YES entry: model win probability ≥ 90% AND market ask > 90¢
-    if (market.winProbability >= (1 - ENTRY_NO_WIN_THRESHOLD) && market.yesAsk > ENTRY_ASK_THRESHOLD && market.yesAsk < 1.0) {
+    // YES entry: market-implied probability ≥ 90¢ ask (win probability logged for analysis only)
+    if (market.yesAsk > ENTRY_ASK_THRESHOLD && market.yesAsk < 1.0) {
       const costCents = Math.round(market.yesAsk * 100);
       const contracts = Math.floor(maxSpendCents / costCents);
       if (contracts > 0) {
@@ -69,7 +66,7 @@ export class TradingStrategy {
         return {
           action: 'buy',
           side:   'yes',
-          reason: `YES ask=${(market.yesAsk * 100).toFixed(0)}¢ P(YES)=${(market.winProbability * 100).toFixed(1)}% | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
+          reason: `YES ask=${(market.yesAsk * 100).toFixed(0)}¢ model_prob=${(market.winProbability * 100).toFixed(1)}% | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
           market,
           suggestedContracts:  contracts,
           suggestedLimitPrice: market.yesAsk,
@@ -77,8 +74,8 @@ export class TradingStrategy {
       }
     }
 
-    // NO entry: model win probability ≤ 10% AND market NO ask > 90¢
-    if (market.winProbability <= ENTRY_NO_WIN_THRESHOLD && market.noAsk > ENTRY_ASK_THRESHOLD && market.noAsk < 1.0) {
+    // NO entry: market-implied NO probability ≥ 90¢ ask (YES bid < 10¢)
+    if (market.noAsk > ENTRY_ASK_THRESHOLD && market.noAsk < 1.0) {
       const costCents = Math.round(market.noAsk * 100);
       const contracts = Math.floor(maxSpendCents / costCents);
       if (contracts > 0) {
@@ -87,7 +84,7 @@ export class TradingStrategy {
         return {
           action: 'buy',
           side:   'no',
-          reason: `NO ask=${(market.noAsk * 100).toFixed(0)}¢ P(NO)=${((1 - market.winProbability) * 100).toFixed(1)}% | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
+          reason: `NO ask=${(market.noAsk * 100).toFixed(0)}¢ model_prob=${((1 - market.winProbability) * 100).toFixed(1)}% | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
           market,
           suggestedContracts:  contracts,
           suggestedLimitPrice: market.noAsk,
@@ -97,7 +94,7 @@ export class TradingStrategy {
 
     return {
       action: 'hold',
-      reason: `prob=${(market.winProbability * 100).toFixed(1)}% | YES ask=${(market.yesAsk * 100).toFixed(0)}¢ NO ask=${(market.noAsk * 100).toFixed(0)}¢ — no qualifying side`,
+      reason: `YES ask=${(market.yesAsk * 100).toFixed(0)}¢ NO ask=${(market.noAsk * 100).toFixed(0)}¢ model_prob=${(market.winProbability * 100).toFixed(1)}% — no qualifying side`,
       market,
     };
   }
@@ -110,7 +107,6 @@ export class TradingStrategy {
    */
   evaluateExit(market: BtcMarket, heldContracts: number, suppressSoftExit = false, side: 'yes' | 'no' = 'yes'): TradeSignal {
     const bid     = side === 'yes' ? market.yesBid : market.noBid;
-    const prob    = side === 'yes' ? market.winProbability : 1 - market.winProbability;
     const sideStr = side.toUpperCase();
 
     // Emergency exit: single-tick bid crash (≥15¢ drop) overrides probability guard
@@ -155,22 +151,12 @@ export class TradingStrategy {
         };
       }
 
-      // Probability guard: suppress exit if model still shows high confidence
-      if (prob >= EXIT_PROBABILITY_GUARD) {
-        this.lowBidCounts.delete(market.ticker);
-        return {
-          action: 'hold',
-          reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone but P(${sideStr})=${(prob * 100).toFixed(1)}% above guard — holding`,
-          market,
-        };
-      }
-
       const count = (this.lowBidCounts.get(market.ticker) ?? 0) + 1;
       this.lowBidCounts.set(market.ticker, count);
       if (count < EXIT_CONFIRMATION_TICKS) {
         return {
           action: 'hold',
-          reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone — confirming (${count}/${EXIT_CONFIRMATION_TICKS})`,
+          reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone — confirming (${count}/${EXIT_CONFIRMATION_TICKS}) model_prob=${(market.winProbability * 100).toFixed(1)}%`,
           market,
         };
       }

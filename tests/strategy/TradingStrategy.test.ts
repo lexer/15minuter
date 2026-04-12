@@ -5,7 +5,6 @@ import {
   ENTRY_MAX_SECONDS,
   EXIT_PROBABILITY_THRESHOLD,
   EXIT_HARD_STOP,
-  EXIT_PROBABILITY_GUARD,
   EXIT_CONFIRMATION_TICKS,
   WINDOW_BUDGET_CENTS,
 } from '../../src/strategy/TradingStrategy';
@@ -41,8 +40,8 @@ describe('TradingStrategy', () => {
   });
 
   describe('evaluateEntry', () => {
-    it('returns YES buy when YES ask exceeds threshold AND win probability ≥ 90%', () => {
-      // winProbability=0.93 (default), yesAsk=0.94 → qualifies
+    it('returns YES buy when YES ask exceeds threshold', () => {
+      // yesAsk=0.94 > 90¢ → qualifies regardless of model probability
       const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94, winProbability: 0.93 }), 100_000);
       expect(signal.action).toBe('buy');
       expect(signal.side).toBe('yes');
@@ -50,14 +49,15 @@ describe('TradingStrategy', () => {
       expect(signal.suggestedLimitPrice).toBe(0.94);
     });
 
-    it('holds when YES ask > 90¢ but model win probability < 90%', () => {
-      // Market prices YES at 94¢ but our model only gives 80% — skip
-      const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94, winProbability: 0.80 }), 100_000);
-      expect(signal.action).toBe('hold');
+    it('returns YES buy even when model probability is low if market ask > 90¢', () => {
+      // Market price is the sole gate — model probability is logged only
+      const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94, winProbability: 0.50 }), 100_000);
+      expect(signal.action).toBe('buy');
+      expect(signal.side).toBe('yes');
     });
 
-    it('returns NO buy when win probability is ≤ 10% and NO ask > 90¢', () => {
-      // winProbability=0.05 → P(NO)=95%; noAsk=0.95 → buy NO
+    it('returns NO buy when NO ask > 90¢', () => {
+      // noAsk=0.95 → buy NO; model probability is logged only
       const signal = strategy.evaluateEntry(
         makeMarket({ winProbability: 0.05, noAsk: 0.95, noBid: 0.93, yesAsk: 0.07, yesBid: 0.05 }),
         100_000,
@@ -68,9 +68,9 @@ describe('TradingStrategy', () => {
       expect(signal.suggestedContracts).toBeGreaterThan(0);
     });
 
-    it('holds when win probability is between 10% and 90% (no qualifying side)', () => {
+    it('holds when neither YES nor NO ask exceeds 90¢', () => {
       const signal = strategy.evaluateEntry(
-        makeMarket({ winProbability: 0.5, yesAsk: 0.5, noAsk: 0.5 }),
+        makeMarket({ yesAsk: 0.5, noAsk: 0.5 }),
         100_000,
       );
       expect(signal.action).toBe('hold');
@@ -164,15 +164,9 @@ describe('TradingStrategy', () => {
       expect(strategy.evaluateExit(low, 5).action).toBe('sell');
     });
 
-    it('holds in soft zone when model probability is above guard', () => {
-      const market = makeMarket({ yesBid: 0.75, winProbability: EXIT_PROBABILITY_GUARD + 0.01 });
-      for (let i = 0; i < EXIT_CONFIRMATION_TICKS + 2; i++) {
-        expect(strategy.evaluateExit(market, 5).action).toBe('hold');
-      }
-    });
-
-    it('sells in soft zone when probability is below guard (after confirmation)', () => {
-      const market = makeMarket({ yesBid: 0.75, winProbability: EXIT_PROBABILITY_GUARD - 0.01 });
+    it('sells in soft zone after confirmation ticks regardless of model probability', () => {
+      // Probability guard removed — bid level is the sole gate
+      const market = makeMarket({ yesBid: 0.75, winProbability: 0.95 });
       for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
         expect(strategy.evaluateExit(market, 5).action).toBe('hold');
       }
