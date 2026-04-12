@@ -68,9 +68,8 @@ const WINDOW_MS = 15 * 60 * 1_000; // 15-minute window size
 
 function windowDir(windowEndMs: number): string {
   const d       = new Date(windowEndMs);
-  const dateStr = d.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
   const timeStr = d.toLocaleTimeString('en-GB', { timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit', hour12: false }).replace(':', '-');
-  return path.resolve(process.cwd(), 'logs', 'analysis', `${dateStr}_${timeStr}`);
+  return path.resolve(process.cwd(), 'logs', 'analysis', timeStr);
 }
 
 export class AnalysisLogger {
