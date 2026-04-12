@@ -33,7 +33,7 @@ export interface BtcMarket {
   winProbability:    number;
   isInTradingWindow: boolean;
   secondsLeft:       number;
-  /** Threshold price from the ticker (e.g. T83499 → 83499). Used for settlement. */
+  /** Threshold price from floor_strike field (e.g. 71544.59). Used for settlement. */
   threshold:         number;
   /** BRTI samples collected during the final 60-second settlement window. */
   settlementSamples: number[];
@@ -215,7 +215,7 @@ export class MarketService {
 
     if (yesBid === 0 && yesAsk === 0 && lastPrice === 0) return null;
 
-    const threshold         = this.parseThreshold(m.ticker);
+    const threshold         = m.floor_strike ?? 0;
     const closeTime         = new Date(m.close_time);
     const secondsLeft       = this.computeSecondsLeft(closeTime);
     const isInTradingWindow = this.inWindow(secondsLeft);
@@ -275,15 +275,6 @@ export class MarketService {
 
     const marketMid = bid > 0 && ask > 0 ? (bid + ask) / 2 : modelProb;
     return BLEND_MARKET_WEIGHT * marketMid + (1 - BLEND_MARKET_WEIGHT) * modelProb;
-  }
-
-  /**
-   * Extracts the threshold price from a KXBTC15M ticker.
-   * e.g. "KXBTC15M-26APR11-T83499" → 83499
-   */
-  private parseThreshold(ticker: string): number {
-    const match = /-T(\d+)$/.exec(ticker);
-    return match ? parseInt(match[1], 10) : 0;
   }
 
   private inWindow(secondsLeft: number): boolean {

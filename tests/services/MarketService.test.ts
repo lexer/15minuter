@@ -10,7 +10,8 @@ function makeMonitor(state: BrtiState | null = null): jest.Mocked<Pick<BtcPriceM
   return { getBtcState: jest.fn().mockResolvedValue(state) } as never;
 }
 
-/** Build a raw Kalshi market with the threshold embedded in the ticker. */
+/** Build a raw Kalshi market with the threshold in the floor_strike field.
+ *  Pass threshold=0 to omit floor_strike (simulates markets without it). */
 function makeRawMarket(ticker: string, secondsFromNow: number, threshold = 80000): object {
   return {
     ticker,
@@ -25,6 +26,7 @@ function makeRawMarket(ticker: string, secondsFromNow: number, threshold = 80000
     volume_fp:           '100',
     close_time:          new Date(Date.now() + secondsFromNow * 1000).toISOString(),
     can_close_early:     false,
+    ...(threshold > 0 ? { floor_strike: threshold } : {}),
     rules_primary:       '',
     rules_secondary:     '',
   };
@@ -69,8 +71,8 @@ describe('MarketService', () => {
       expect(m.threshold).toBe(80000);
     });
 
-    it('returns threshold 0 for unparseable ticker', async () => {
-      const svc = new MarketService(makeClient([makeRawMarket('UNKNOWN', 120)]) as never, makeMonitor(BRTI_STATE) as never);
+    it('returns threshold 0 when floor_strike is absent', async () => {
+      const svc = new MarketService(makeClient([makeRawMarket('UNKNOWN', 120, 0)]) as never, makeMonitor(BRTI_STATE) as never);
       const markets = await svc.getAllLiveBtcMarkets();
       // Markets with 0 threshold still parse (they just use market mid for prob)
       expect(markets[0].threshold).toBe(0);

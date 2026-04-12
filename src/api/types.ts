@@ -23,6 +23,7 @@ export interface KalshiMarket {
   updated_time?: string;
   result?: string;                  // 'yes' | 'no' after settlement
   can_close_early: boolean;
+  floor_strike?: number;             // resolution threshold in USD (e.g. 71544.59)
   rules_primary: string;
   rules_secondary: string;
   response_price_units?: string;
