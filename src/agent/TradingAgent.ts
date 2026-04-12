@@ -256,12 +256,13 @@ export class TradingAgent {
     }
 
     const isCascade = this.liquidationMonitor.isLiquidationCascade();
-    const signal    = this.strategy.evaluateExit(market, record.contracts, isCascade);
+    const signal    = this.strategy.evaluateExit(market, record.contracts, isCascade, record.side);
 
     if (signal.action === 'sell') {
       console.log(`[Agent] EXIT ${market.ticker}: ${signal.reason}`);
       this.strategy.clearExitConfirmation(market.ticker);
-      const fill = await this.executeExit(record, market, signal.suggestedLimitPrice ?? market.yesBid);
+      const exitBid = record.side === 'no' ? market.noBid : market.yesBid;
+      const fill = await this.executeExit(record, market, signal.suggestedLimitPrice ?? exitBid);
       this.analysis.logDecision({
         type: 'exit', ticker: market.ticker, reason: signal.reason,
         contracts: record.contracts, filledContracts: fill?.filledCount,
@@ -276,10 +277,11 @@ export class TradingAgent {
       this.analysis.logDecision({ type: 'hold', ticker: market.ticker, reason: signal.reason });
 
       // Top-up if position is below window budget limit
-      const topUp = this.strategy.evaluateTopUp(market, record.contracts, this.cachedBalanceCents);
+      const topUp = this.strategy.evaluateTopUp(market, record.contracts, this.cachedBalanceCents, record.side);
       if (topUp.contracts > 0) {
+        const topUpPrice = record.side === 'no' ? market.noAsk : market.yesAsk;
         console.log(`[Agent] TOP-UP ${market.ticker}: ${topUp.reason}`);
-        const fill = await this.executeTopUp(record, market, topUp.contracts, market.yesAsk);
+        const fill = await this.executeTopUp(record, market, topUp.contracts, topUpPrice);
         this.analysis.logDecision({
           type: 'entry', ticker: market.ticker, reason: `Top-up: ${topUp.reason}`,
           contracts: topUp.contracts, filledContracts: fill?.filledCount,
@@ -313,14 +315,15 @@ export class TradingAgent {
     }
 
     const targetStr = market.threshold > 0 ? ` | target=$${market.threshold.toFixed(2)}` : '';
+    const sideLabel = signal.side === 'no' ? 'NO' : 'YES';
     console.log(
-      `[Agent] ENTRY ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}%` +
+      `[Agent] ENTRY ${sideLabel} ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}%` +
       `${targetStr} | ${signal.suggestedContracts} contracts @ $${signal.suggestedLimitPrice?.toFixed(2)}`,
     );
 
     this.pendingEntries.add(market.ticker);
     try {
-      const fill = await this.executeEntry(market, signal.suggestedContracts!, signal.suggestedLimitPrice!);
+      const fill = await this.executeEntry(market, signal.suggestedContracts!, signal.suggestedLimitPrice!, signal.side ?? 'yes');
       this.analysis.logDecision({
         type: 'entry', ticker: market.ticker, reason: signal.reason,
         contracts: signal.suggestedContracts, filledContracts: fill?.filledCount,
@@ -339,9 +342,12 @@ export class TradingAgent {
     market: BtcMarket,
     contracts: number,
     limitPrice: number,
+    side: 'yes' | 'no' = 'yes',
   ): Promise<{ orderId: string; filledCount: number } | undefined> {
     try {
-      const order = await this.orders.buyYes(market.ticker, contracts, limitPrice);
+      const order = side === 'no'
+        ? await this.orders.buyNo(market.ticker, contracts, limitPrice)
+        : await this.orders.buyYes(market.ticker, contracts, limitPrice);
       if (order.filledCount === 0) {
         console.log(`[Agent] Order ${order.orderId} unfilled and cancelled`);
         return { orderId: order.orderId, filledCount: 0 };
@@ -353,7 +359,7 @@ export class TradingAgent {
         id:                    crypto.randomUUID(),
         ticker:                market.ticker,
         marketTitle:           market.title,
-        side:                  'yes',
+        side,
         action:                'buy',
         contracts:             order.filledCount,
         pricePerContract:      limitPrice,
@@ -364,7 +370,7 @@ export class TradingAgent {
       this.history.recordTrade(record);
       this.orderTradeMap.set(order.orderId, { tradeId: record.id, limitPrice, filledContracts: order.filledCount });
       this.applyFillPrice(order.orderId);
-      console.log(`[Agent] Bought ${order.filledCount} YES on ${market.ticker} @ $${limitPrice.toFixed(2)} | orderId=${order.orderId}`);
+      console.log(`[Agent] Bought ${order.filledCount} ${side.toUpperCase()} on ${market.ticker} @ $${limitPrice.toFixed(2)} | orderId=${order.orderId}`);
       return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
       console.error(`[Agent] Failed to buy ${market.ticker}:`, err);
@@ -381,7 +387,9 @@ export class TradingAgent {
     limitPrice: number,
   ): Promise<{ orderId: string; filledCount: number } | undefined> {
     try {
-      const order = await this.orders.buyYes(market.ticker, contracts, limitPrice);
+      const order = record.side === 'no'
+        ? await this.orders.buyNo(market.ticker, contracts, limitPrice)
+        : await this.orders.buyYes(market.ticker, contracts, limitPrice);
       if (order.filledCount === 0) {
         console.log(`[Agent] Top-up ${order.orderId} unfilled`);
         return { orderId: order.orderId, filledCount: 0 };
@@ -412,7 +420,9 @@ export class TradingAgent {
     limitPrice: number,
   ): Promise<{ orderId: string; filledCount: number } | undefined> {
     try {
-      const order = await this.orders.sellYes(record.ticker, record.contracts, limitPrice);
+      const order = record.side === 'no'
+        ? await this.orders.sellNo(record.ticker, record.contracts, limitPrice)
+        : await this.orders.sellYes(record.ticker, record.contracts, limitPrice);
       if (order.filledCount === 0) {
         console.log(`[Agent] Sell ${order.orderId} unfilled — position remains`);
         return { orderId: order.orderId, filledCount: 0 };

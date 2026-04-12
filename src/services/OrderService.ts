@@ -42,6 +42,37 @@ export class OrderService {
     return this.parseOrder(await this.client.placeOrder(req));
   }
 
+  /** Buy NO contracts. noLimitPrice is the NO price in dollars (e.g. 0.94).
+   *  Kalshi accepts yes_price = 100 - round(noPrice × 100). */
+  async buyNo(ticker: string, contracts: number, noLimitPrice: number): Promise<Order> {
+    const yesPrice = Math.min(99, Math.max(1, Math.round((1 - noLimitPrice) * 100)));
+    const req: PlaceOrderRequest = {
+      ticker,
+      action: 'buy',
+      side: 'no',
+      count: contracts,
+      type: 'limit',
+      yes_price: yesPrice,
+      time_in_force: 'immediate_or_cancel',
+    };
+    return this.parseOrder(await this.client.placeOrder(req));
+  }
+
+  /** Sell NO contracts. noLimitPrice is the NO price in dollars. */
+  async sellNo(ticker: string, contracts: number, noLimitPrice: number): Promise<Order> {
+    const yesPrice = Math.min(99, Math.max(1, Math.round((1 - noLimitPrice) * 100)));
+    const req: PlaceOrderRequest = {
+      ticker,
+      action: 'sell',
+      side: 'no',
+      count: contracts,
+      type: 'limit',
+      yes_price: yesPrice,
+      time_in_force: 'immediate_or_cancel',
+    };
+    return this.parseOrder(await this.client.placeOrder(req));
+  }
+
   private parseOrder(resp: KalshiOrderResponse): Order {
     const o = resp.order;
     return {

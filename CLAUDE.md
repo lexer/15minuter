@@ -36,12 +36,14 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 
 1. Trade exclusively on **`KXBTC15M` Bitcoin 15-minute price-direction markets**. Exact resolution: YES if the **60-second BRTI average before close** ≥ the **60-second BRTI average before open** of the 15-minute window (`floor_strike`). Do not trade any other market type.
 2. Only trade during the **final 60 seconds** of a 15-minute window (the settlement window). Entering at the start of BRTI averaging gives the most information about the outcome. A 5-second floor ensures there is time for an IOC order to execute.
-3. **Entry**: YES ask **> 90¢** — buy immediately on the first qualifying tick (IOC order). No confirmation window.
-4. **Exit** (evaluated in priority order on each tick):
+3. **Entry** (evaluated symmetrically for both sides; IOC order, no confirmation window):
+   - **YES**: YES ask **> 90¢** → buy YES. Win probability must be high (model confirms).
+   - **NO**: NO ask **> 90¢** (i.e. YES bid < 10¢, win probability ≤ 10%) → buy NO.
+4. **Exit** (evaluated in priority order each tick; uses YES bid for YES positions, NO bid for NO positions):
    - Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit).
    - **bid ≤ 70¢ → hard stop: sell immediately, no probability guard, no confirmation window.** Caps max loss at ~20¢/contract.
-   - 70¢ < bid ≤ 80¢ AND blended win probability ≥ 85% → hold (probability guard blocks exit).
-   - 70¢ < bid ≤ 80¢ AND blended win probability < 85% → require **3 consecutive ticks**, then sell at bid.
+   - 70¢ < bid ≤ 80¢ AND P(held side) ≥ 85% → hold (probability guard blocks exit).
+   - 70¢ < bid ≤ 80¢ AND P(held side) < 85% → require **3 consecutive ticks**, then sell at bid.
    - bid > 80¢ → hold.
 5. **Win probability**: `0.7 × Gaussian model + 0.3 × Kalshi market mid`.
    - **Gaussian model**: `Φ(priceChangeFraction / (σ_eff × √secondsLeft) + score × 1.5)`

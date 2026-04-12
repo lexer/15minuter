@@ -41,11 +41,32 @@ describe('TradingStrategy', () => {
   });
 
   describe('evaluateEntry', () => {
-    it('returns buy when ask exceeds threshold and inside entry window', () => {
+    it('returns YES buy when YES ask exceeds threshold', () => {
       const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94 }), 100_000);
       expect(signal.action).toBe('buy');
+      expect(signal.side).toBe('yes');
       expect(signal.suggestedContracts).toBeGreaterThan(0);
       expect(signal.suggestedLimitPrice).toBe(0.94);
+    });
+
+    it('returns NO buy when win probability is ≤ 10% and NO ask > 90¢', () => {
+      // winProbability=0.05 → P(NO)=95%; noAsk=0.95 → buy NO
+      const signal = strategy.evaluateEntry(
+        makeMarket({ winProbability: 0.05, noAsk: 0.95, noBid: 0.93, yesAsk: 0.07, yesBid: 0.05 }),
+        100_000,
+      );
+      expect(signal.action).toBe('buy');
+      expect(signal.side).toBe('no');
+      expect(signal.suggestedLimitPrice).toBe(0.95);
+      expect(signal.suggestedContracts).toBeGreaterThan(0);
+    });
+
+    it('holds when win probability is between 10% and 90% (no qualifying side)', () => {
+      const signal = strategy.evaluateEntry(
+        makeMarket({ winProbability: 0.5, yesAsk: 0.5, noAsk: 0.5 }),
+        100_000,
+      );
+      expect(signal.action).toBe('hold');
     });
 
     it('holds when not in trading window', () => {
@@ -55,10 +76,9 @@ describe('TradingStrategy', () => {
       expect(signal.reason).toMatch(/entry window/);
     });
 
-    it('holds when ask is at or below entry threshold', () => {
+    it('holds when ask is exactly at entry threshold (not strictly above)', () => {
       const signal = strategy.evaluateEntry(makeMarket({ yesAsk: ENTRY_ASK_THRESHOLD }), 100_000);
       expect(signal.action).toBe('hold');
-      expect(signal.reason).toMatch(/entry threshold/);
     });
 
     it('holds when ask is 100¢', () => {
@@ -72,11 +92,10 @@ describe('TradingStrategy', () => {
       expect(signal.action).toBe('hold');
     });
 
-    it('holds when balance is too small for 1 contract', () => {
-      // ask=0.94 → costPerContract=94 cents; balance=50 cents → 0 contracts
+    it('holds when balance is too small for 1 contract on either side', () => {
+      // ask=0.94 → 94¢/contract; balance=50 cents → 0 YES contracts; NO ask=8¢ → not ≥90¢
       const signal = strategy.evaluateEntry(makeMarket({ yesAsk: 0.94 }), 50);
       expect(signal.action).toBe('hold');
-      expect(signal.reason).toMatch(/Insufficient/);
     });
 
     it('sizes at window budget ($10) when balance is ample', () => {
@@ -187,6 +206,22 @@ describe('TradingStrategy', () => {
       const signal = strategy.evaluateExit(makeMarket({ yesBid: 0.72, winProbability: 0.90 }), 5);
       expect(signal.action).toBe('sell');
       expect(signal.reason).toMatch(/Emergency/);
+    });
+
+    it('evaluates NO exit using noBid and P(NO) = 1 - winProbability', () => {
+      // noBid=0.92 → above threshold → hold
+      expect(strategy.evaluateExit(makeMarket({ noBid: 0.92 }), 5, false, 'no').action).toBe('hold');
+      // noBid=0.60 → hard stop → sell
+      expect(strategy.evaluateExit(makeMarket({ noBid: 0.60 }), 5, false, 'no').action).toBe('sell');
+    });
+
+    it('NO hard stop fires using noBid regardless of yesBid', () => {
+      // yesBid is high (no YES hard stop), but noBid is below hard stop
+      const market = makeMarket({ yesBid: 0.92, noBid: 0.65, winProbability: 0.08 });
+      const signal = strategy.evaluateExit(market, 5, false, 'no');
+      expect(signal.action).toBe('sell');
+      expect(signal.reason).toMatch(/Hard stop/);
+      expect(signal.side).toBe('no');
     });
   });
 

@@ -1,9 +1,13 @@
 import { BtcMarket } from '../services/MarketService';
 
 // ── Entry thresholds ─────────────────────────────────────────────────────────
-export const ENTRY_ASK_THRESHOLD  = 0.9;   // YES ask must exceed this to enter
+export const ENTRY_ASK_THRESHOLD  = 0.9;   // ask must exceed this to enter (YES or NO side)
 export const ENTRY_MIN_SECONDS    = 5;     // enter no closer than 5s to close (IOC buffer)
 export const ENTRY_MAX_SECONDS    = 60;    // enter only in the final 60s (settlement window)
+// Win probability thresholds for side selection:
+//   winProb > 1 - ENTRY_NO_WIN_THRESHOLD (= 0.9) → buy YES
+//   winProb < ENTRY_NO_WIN_THRESHOLD      (= 0.1) → buy NO
+export const ENTRY_NO_WIN_THRESHOLD = 0.10;
 
 // ── Exit thresholds ──────────────────────────────────────────────────────────
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;  // bid ≤ this triggers soft-exit zone
@@ -18,9 +22,12 @@ export const WINDOW_BUDGET_CENTS = 1_000;
 
 export interface TradeSignal {
   action: 'buy' | 'sell' | 'hold';
+  /** Which side of the market to trade. Required for 'buy'/'sell', omitted for 'hold'. */
+  side?: 'yes' | 'no';
   reason: string;
   market: BtcMarket;
   suggestedContracts?: number;
+  /** For YES: limit price in dollars. For NO: limit price in NO dollars (e.g. 0.06). */
   suggestedLimitPrice?: number;
 }
 
@@ -50,89 +57,110 @@ export class TradingStrategy {
       };
     }
 
-    if (market.yesAsk <= ENTRY_ASK_THRESHOLD) {
-      return {
-        action: 'hold',
-        reason: `Ask ${(market.yesAsk * 100).toFixed(1)}¢ ≤ entry threshold ${ENTRY_ASK_THRESHOLD * 100}¢`,
-        market,
-      };
-    }
-    if (market.yesAsk >= 1.0) {
-      return { action: 'hold', reason: 'Ask 100¢ — no profit potential', market };
+    const maxSpendCents = Math.min(WINDOW_BUDGET_CENTS, availableBalanceCents);
+
+    // YES entry: win probability ≥ 90% (YES ask > 90¢)
+    if (market.yesAsk > ENTRY_ASK_THRESHOLD && market.yesAsk < 1.0) {
+      const costCents = Math.round(market.yesAsk * 100);
+      const contracts = Math.floor(maxSpendCents / costCents);
+      if (contracts > 0) {
+        const spendDollars = (contracts * market.yesAsk).toFixed(2);
+        const balancePct   = (contracts * costCents / availableBalanceCents * 100).toFixed(1);
+        return {
+          action: 'buy',
+          side:   'yes',
+          reason: `YES ask=${(market.yesAsk * 100).toFixed(0)}¢ | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
+          market,
+          suggestedContracts:  contracts,
+          suggestedLimitPrice: market.yesAsk,
+        };
+      }
     }
 
-    // Size: up to $10 window budget, capped at available cash
-    const maxSpendCents         = Math.min(WINDOW_BUDGET_CENTS, availableBalanceCents);
-    const costPerContractCents  = Math.round(market.yesAsk * 100);
-    const contracts             = Math.floor(maxSpendCents / costPerContractCents);
-
-    if (contracts <= 0) {
-      return { action: 'hold', reason: 'Insufficient balance for 1 contract', market };
+    // NO entry: win probability ≤ 10% (NO ask > 90¢, i.e. YES bid < 10¢)
+    if (market.winProbability <= ENTRY_NO_WIN_THRESHOLD && market.noAsk > ENTRY_ASK_THRESHOLD && market.noAsk < 1.0) {
+      const costCents = Math.round(market.noAsk * 100);
+      const contracts = Math.floor(maxSpendCents / costCents);
+      if (contracts > 0) {
+        const spendDollars = (contracts * market.noAsk).toFixed(2);
+        const balancePct   = (contracts * costCents / availableBalanceCents * 100).toFixed(1);
+        return {
+          action: 'buy',
+          side:   'no',
+          reason: `NO ask=${(market.noAsk * 100).toFixed(0)}¢ (P(NO)=${((1 - market.winProbability) * 100).toFixed(1)}%) | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
+          market,
+          suggestedContracts:  contracts,
+          suggestedLimitPrice: market.noAsk,
+        };
+      }
     }
-
-    const spendDollars = (contracts * market.yesAsk).toFixed(2);
-    const balancePct   = (contracts * costPerContractCents / availableBalanceCents * 100).toFixed(1);
 
     return {
-      action: 'buy',
-      reason: `ask=${(market.yesAsk * 100).toFixed(0)}¢ | ${market.secondsLeft.toFixed(0)}s left | risking $${spendDollars} (${balancePct}% of balance)`,
+      action: 'hold',
+      reason: `prob=${(market.winProbability * 100).toFixed(1)}% | YES ask=${(market.yesAsk * 100).toFixed(0)}¢ NO ask=${(market.noAsk * 100).toFixed(0)}¢ — no qualifying side`,
       market,
-      suggestedContracts:   contracts,
-      suggestedLimitPrice:  market.yesAsk,
     };
   }
 
   /**
    * @param suppressSoftExit - When true (liquidation cascade active), soft-zone
    *   confirmation exits are suspended. Hard stops and emergency exits still fire.
+   * @param side - Which side we are holding. Defaults to 'yes'.
+   *   For NO positions, uses noBid and P(NO) = 1 - winProbability.
    */
-  evaluateExit(market: BtcMarket, heldContracts: number, suppressSoftExit = false): TradeSignal {
+  evaluateExit(market: BtcMarket, heldContracts: number, suppressSoftExit = false, side: 'yes' | 'no' = 'yes'): TradeSignal {
+    const bid     = side === 'yes' ? market.yesBid : market.noBid;
+    const prob    = side === 'yes' ? market.winProbability : 1 - market.winProbability;
+    const sideStr = side.toUpperCase();
+
     // Emergency exit: single-tick bid crash (≥15¢ drop) overrides probability guard
     const prevBid = this.previousBids.get(market.ticker);
-    this.previousBids.set(market.ticker, market.yesBid);
-    if (prevBid !== undefined && prevBid - market.yesBid >= EXIT_EMERGENCY_DROP) {
+    this.previousBids.set(market.ticker, bid);
+    if (prevBid !== undefined && prevBid - bid >= EXIT_EMERGENCY_DROP) {
       this.lowBidCounts.delete(market.ticker);
       this.previousBids.delete(market.ticker);
       return {
         action: 'sell',
-        reason: `Emergency exit: bid crashed ${(prevBid * 100).toFixed(0)}¢→${(market.yesBid * 100).toFixed(0)}¢ (${((prevBid - market.yesBid) * 100).toFixed(0)}¢ drop in one tick)`,
+        side,
+        reason: `Emergency exit: ${sideStr} bid crashed ${(prevBid * 100).toFixed(0)}¢→${(bid * 100).toFixed(0)}¢ (${((prevBid - bid) * 100).toFixed(0)}¢ drop in one tick)`,
         market,
         suggestedContracts:  heldContracts,
-        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
+        suggestedLimitPrice: bid > 0 ? bid : 0,
       };
     }
 
     // Hard stop: bid ≤ 70¢ — exit immediately, no guard, no confirmation window
-    if (market.yesBid <= EXIT_HARD_STOP) {
+    if (bid <= EXIT_HARD_STOP) {
       this.lowBidCounts.delete(market.ticker);
       this.previousBids.delete(market.ticker);
       return {
         action: 'sell',
-        reason: `Hard stop: bid ${(market.yesBid * 100).toFixed(0)}¢ ≤ ${EXIT_HARD_STOP * 100}¢ — exiting immediately`,
+        side,
+        reason: `Hard stop: ${sideStr} bid ${(bid * 100).toFixed(0)}¢ ≤ ${EXIT_HARD_STOP * 100}¢ — exiting immediately`,
         market,
         suggestedContracts:  heldContracts,
-        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
+        suggestedLimitPrice: bid > 0 ? bid : 0,
       };
     }
 
-    if (market.yesBid <= EXIT_PROBABILITY_THRESHOLD) {
+    if (bid <= EXIT_PROBABILITY_THRESHOLD) {
       // During a liquidation cascade: suspend soft-zone confirmation to avoid panic sells.
       // Hard stop (above) and emergency exit (above) still fire as safety nets.
       if (suppressSoftExit) {
         this.lowBidCounts.delete(market.ticker);
         return {
           action: 'hold',
-          reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ soft zone — suspended during liquidation cascade`,
+          reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone — suspended during liquidation cascade`,
           market,
         };
       }
 
       // Probability guard: suppress exit if model still shows high confidence
-      if (market.winProbability >= EXIT_PROBABILITY_GUARD) {
+      if (prob >= EXIT_PROBABILITY_GUARD) {
         this.lowBidCounts.delete(market.ticker);
         return {
           action: 'hold',
-          reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ soft zone but prob=${(market.winProbability * 100).toFixed(1)}% above guard — holding`,
+          reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone but P(${sideStr})=${(prob * 100).toFixed(1)}% above guard — holding`,
           market,
         };
       }
@@ -142,7 +170,7 @@ export class TradingStrategy {
       if (count < EXIT_CONFIRMATION_TICKS) {
         return {
           action: 'hold',
-          reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ soft zone — confirming (${count}/${EXIT_CONFIRMATION_TICKS})`,
+          reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone — confirming (${count}/${EXIT_CONFIRMATION_TICKS})`,
           market,
         };
       }
@@ -150,10 +178,11 @@ export class TradingStrategy {
       this.lowBidCounts.delete(market.ticker);
       return {
         action: 'sell',
-        reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ soft zone for ${EXIT_CONFIRMATION_TICKS} ticks`,
+        side,
+        reason: `${sideStr} bid ${(bid * 100).toFixed(0)}¢ soft zone for ${EXIT_CONFIRMATION_TICKS} ticks`,
         market,
         suggestedContracts:  heldContracts,
-        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
+        suggestedLimitPrice: bid > 0 ? bid : 0,
       };
     }
 
@@ -161,7 +190,7 @@ export class TradingStrategy {
     this.lowBidCounts.delete(market.ticker);
     return {
       action: 'hold',
-      reason: `Hold — bid ${(market.yesBid * 100).toFixed(0)}¢ above exit threshold`,
+      reason: `Hold — ${sideStr} bid ${(bid * 100).toFixed(0)}¢ above exit threshold`,
       market,
     };
   }
@@ -174,16 +203,19 @@ export class TradingStrategy {
     market: BtcMarket,
     heldContracts: number,
     balanceCents: number,
+    side: 'yes' | 'no' = 'yes',
   ): { contracts: number; reason: string } {
     if (!market.isInTradingWindow) {
       return { contracts: 0, reason: `Outside entry window (${market.secondsLeft.toFixed(0)}s left)` };
     }
-    if (market.yesAsk <= ENTRY_ASK_THRESHOLD || market.yesAsk >= 1.0) {
-      return { contracts: 0, reason: `Ask ${(market.yesAsk * 100).toFixed(0)}¢ outside entry range` };
+
+    const ask = side === 'yes' ? market.yesAsk : market.noAsk;
+    if (ask <= ENTRY_ASK_THRESHOLD || ask >= 1.0) {
+      return { contracts: 0, reason: `${side.toUpperCase()} ask ${(ask * 100).toFixed(0)}¢ outside entry range` };
     }
 
     const maxSpendCents        = Math.min(WINDOW_BUDGET_CENTS, balanceCents);
-    const costPerContractCents = Math.round(market.yesAsk * 100);
+    const costPerContractCents = Math.round(ask * 100);
     const targetContracts      = Math.floor(maxSpendCents / costPerContractCents);
     const topUp                = Math.max(0, targetContracts - heldContracts);
 
@@ -193,7 +225,7 @@ export class TradingStrategy {
 
     return {
       contracts: topUp,
-      reason: `Top-up shortfall: have ${heldContracts}, target ${targetContracts} (ask=${(market.yesAsk * 100).toFixed(0)}¢)`,
+      reason: `Top-up shortfall: have ${heldContracts}, target ${targetContracts} (${side.toUpperCase()} ask=${(ask * 100).toFixed(0)}¢)`,
     };
   }
 
