@@ -40,7 +40,7 @@ src/
 Kalshi requires RSA-PSS signatures. Message: `{timestamp_ms}{METHOD}{/trade-api/v2/path}`. `KALSHI_API_KEY` holds the key UUID; private key in `private_key.pem` (never committed). Same scheme for WebSocket upgrade headers.
 
 ### 2. WebSocket Watchdog
-45-second inactivity watchdog resets on every inbound frame. If Kalshi's 10s heartbeat misses ~4 beats, the socket is terminated and reconnected with fresh auth. Avoids false positives from asymmetric network latency.
+90-second inactivity watchdog resets on every inbound frame. If Kalshi's 10s heartbeat misses ~9 beats, the socket is terminated and reconnected with fresh auth. Set to 90s (up from 45s) after observing false-positive reconnects at 15-minute window boundaries: Kalshi's WS goes quiet between windows, causing the 45s watchdog to fire spuriously ~6 times per day.
 
 ### 3. BTC Price Data — CF Benchmarks BRTI
 `BtcPriceMonitor` connects to the CF Benchmarks BRTI WebSocket (`wss://www.cfbenchmarks.com/ws/v4`).

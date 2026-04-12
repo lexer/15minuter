@@ -8,8 +8,9 @@ const WS_PATH = '/trade-api/ws/v2';
 
 const INITIAL_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS     = 30_000;
-// Kalshi sends heartbeat pings every 10s; if no frame arrives for 45s the connection is dead
-const WATCHDOG_MS          = 45_000;
+// Kalshi sends heartbeat pings every 10s; 90s = 9 missed beats before declaring dead.
+// 45s caused false reconnects at 15-min window boundaries when Kalshi WS goes quiet.
+const WATCHDOG_MS          = 90_000;
 
 // ── Message types ─────────────────────────────────────────────────────────────
 
