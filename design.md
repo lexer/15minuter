@@ -17,7 +17,7 @@ src/
     KalshiWebSocket.ts     — Multiplexed WS (ticker + fill + market_positions); 45s watchdog
     types.ts               — Kalshi API types
   services/
-    BtcPriceMonitor.ts     — Polls Binance for BTC/USDT 15-min candle + spot price (5s TTL)
+    BtcPriceMonitor.ts     — CF Benchmarks BRTI WebSocket (1s ticks); rolling 20-min price history
     BtcProbabilityModel.ts — Gaussian model: P(BTC stays above window open | change%, time left)
     MarketService.ts       — Discovers KXBTC15M markets; computes blended probability; cache
     OrderService.ts        — Places limit orders (IOC)
@@ -88,12 +88,26 @@ Only trade in the final **5–60 seconds** of each 15-minute window (the settlem
 `isInTradingWindow = secondsLeft ∈ [5, 60]` is computed from `market.closeTime - Date.now()`.
 
 ### 7. Entry Criteria
-1. Market must be `active` or `open`
-2. `isInTradingWindow = true`
-3. YES ask **> 90¢**
-4. Size: `min($10 window budget, available cash) / ask` contracts
+Entry is evaluated symmetrically for YES and NO sides.
+
+**YES entry** (bullish):
+1. Market must be `active` or `open`; `isInTradingWindow = true`
+2. YES ask **> 90¢** (win probability is high)
+3. Size: `min($10 window budget, available cash) / yesAsk` contracts
+
+**NO entry** (bearish):
+1. Market must be `active` or `open`; `isInTradingWindow = true`
+2. NO ask **> 90¢** (i.e. YES bid **< 10¢**; win probability ≤ 10%)
+3. Size: `min($10 window budget, available cash) / noAsk` contracts
 
 No confirmation window. IOC order semantics: a momentary ask spike with no real liquidity results in an unfilled order, not a bad fill.
+
+**NO bid/ask derivation**: WS ticker messages only carry YES prices. NO prices are derived on every tick:
+```
+noAsk = 1 − yesBid   (price to buy NO; counterparty sells NO = buys YES at yesBid)
+noBid = 1 − yesAsk   (price to sell NO; counterparty buys NO = sells YES at yesAsk)
+```
+This ensures NO entry IOC orders use the current market price, not a stale REST-fetched value.
 
 ### 8. Exit Criteria (evaluated in priority order each tick)
 1. Single-tick bid crash ≥ 15¢ → emergency exit (overrides probability guard)
@@ -127,8 +141,12 @@ All runtime files use the `btc_` prefix to avoid collisions with other agents:
 
 ### 11. Logging
 The analysis log (`btc_analysis_YYYY-MM-DD.log`) writes one JSON-lines entry per 5s tick including:
-- BTC state: `currentPrice`, `windowOpenPrice`, `priceChangePct`
-- Market snapshots: `ticker`, `winProbability`, `ask`, `bid`, `secondsLeft`
+- BTC state: `currentPrice`, market snapshots for all tracked markets
+- Market snapshots: `ticker`, `targetPrice` (`floor_strike`), `sixtySecondsAvg`, `priceChangePct`, `winProbability`, `ask`, `bid`, `secondsLeft`, optional `signal`/`signalReason`
+- `sixtySecondsAvg` is **always present** (not gated on settlement window):
+  - Pre-settlement: `currentBRTI` (flat projection — outcome if BRTI stays constant)
+  - Settlement window (final 60s): `(mean(samples) × elapsed + currentBRTI × secondsLeft) / 60`
+- `priceChangePct` is always `(sixtySecondsAvg − targetPrice) / targetPrice × 100`
 - Entry/exit decisions with fill status and order ID
 - Open positions with unrealized PnL
 - Summary: `totalTrades`, `realizedPnl`, `unrealizedPnl`, `winRate`
@@ -148,7 +166,7 @@ The analysis log (`btc_analysis_YYYY-MM-DD.log`) writes one JSON-lines entry per
   if open position OR isInTradingWindow: handleMarket()
 
 [every 5s — btcStateLoop]
-  Binance: refreshBtcStates()
+  BRTI: refreshBtcStates()
   for each trading-window market: handleMarket()
   for each open position outside window: handleMarket() (exit only)
   write btc_analysis tick

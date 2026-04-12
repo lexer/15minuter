@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.28.0] — 2026-04-11
+
+### Fixed
+- `MarketService.applyTickerUpdate()`: derive `noBid`/`noAsk` from WS YES prices on every tick (`noAsk = 1 − yesBid`, `noBid = 1 − yesAsk`). WS ticker messages only carry YES prices; NO prices were previously sourced only from the initial REST fetch and became stale, causing NO entry IOC orders to be submitted at wrong prices (often unfilling).
+
+## [1.27.0] — 2026-04-11
+
+### Changed
+- `MarketService.refreshBtcStates()`: settlement samples now sourced from the 1-second `priceHistory` buffer via `getIntervalPrices(closeTime − 60s)` instead of accumulating one sample per 5s poll. Provides up to 60 samples at 1s resolution, matching Kalshi's resolution mechanism.
+- `AnalysisLogger.MarketSnapshot`: `sixtySecondsAvg` is now non-optional and always present. Pre-settlement: current BRTI (flat projection). Settlement window (final 60s): `(mean(samples) × elapsed + currentBRTI × secondsLeft) / 60`.
+- `AnalysisLogger.logBrtiState()`: computes `sixtySecondsAvg` first, then derives `priceChangePct = (sixtySecondsAvg − targetPrice) / targetPrice × 100`. Previously `priceChangePct` was spot-based before the settlement window.
+- `AnalysisLogger.MarketSnapshot`: removed `settlementCount` field — redundant with `secondsLeft` (≈ `60 − secondsLeft` samples accumulated).
+
+### Tests
+- `MarketService.test.ts`: updated settlement sample test to mock `getIntervalPrices` returning a price array; added `noBid`/`noAsk` derivation test.
+- `BtcProbabilityModel.test.ts`: added two tests confirming `calculateSettlement` uses the projected 60-second average, not spot price (samples above/below threshold with spot = threshold shift probability accordingly).
+
 ## [1.25.0] — 2026-04-10
 
 ### Changed
