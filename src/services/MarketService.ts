@@ -128,14 +128,16 @@ export class MarketService {
       const secondsLeft       = this.computeSecondsLeft(market.closeTime);
       const isInTradingWindow = this.inWindow(secondsLeft);
 
-      // Settlement sample accumulator: collect BRTI values during the final 60s.
-      let settlementSamples = market.settlementSamples;
-      if (brtiState) {
-        if (secondsLeft <= SETTLEMENT_WINDOW_SECONDS && secondsLeft > 0) {
-          settlementSamples = [...settlementSamples, brtiState.currentPrice];
-        } else if (secondsLeft > SETTLEMENT_WINDOW_SECONDS) {
-          settlementSamples = []; // reset before settlement window begins
-        }
+      // Settlement samples: pull 1-second BRTI ticks from the price history buffer
+      // for the duration of the settlement window (final 60s before close).
+      // This gives up to 60 samples at 1s resolution — accurate enough for the
+      // projected closing average formula in AnalysisLogger and BtcProbabilityModel.
+      let settlementSamples: number[];
+      if (secondsLeft <= SETTLEMENT_WINDOW_SECONDS && secondsLeft > 0) {
+        const windowStartMs = market.closeTime.getTime() - SETTLEMENT_WINDOW_SECONDS * 1_000;
+        settlementSamples = this.btcMonitor.getIntervalPrices(windowStartMs);
+      } else {
+        settlementSamples = [];
       }
 
       const winProbability = brtiState

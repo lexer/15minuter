@@ -105,14 +105,15 @@ describe('MarketService', () => {
       expect(m.settlementSamples).toHaveLength(0);
     });
 
-    it('accumulates samples when secondsLeft <= 60', async () => {
+    it('populates samples from 1-second price history when in settlement window', async () => {
+      const samplePrices = [80390, 80400, 80410, 80420];
       const monitor = makeMonitor(BRTI_STATE);
+      (monitor.getIntervalPrices as jest.Mock).mockReturnValue(samplePrices);
       const svc = new MarketService(makeClient([makeRawMarket(TICKER_80K, 120)]) as never, monitor as never);
       await svc.getAllLiveBtcMarkets();
 
       // Simulate secondsLeft dropping into settlement window
       const market = svc.getCachedMarkets()[0];
-      // Manually adjust closeTime to put market in settlement window
       (svc as never as { cache: Map<string, unknown> }).cache.set(market.ticker, {
         ...market,
         closeTime: new Date(Date.now() + 45_000), // 45s left — in settlement window
@@ -120,8 +121,7 @@ describe('MarketService', () => {
 
       await svc.refreshBtcStates();
       const updated = svc.getCachedMarkets()[0];
-      expect(updated.settlementSamples).toHaveLength(1);
-      expect(updated.settlementSamples[0]).toBeCloseTo(BRTI_STATE.currentPrice);
+      expect(updated.settlementSamples).toEqual(samplePrices);
     });
   });
 
