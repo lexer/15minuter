@@ -174,11 +174,7 @@ export class AnalysisLogger {
       fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
       this.dirCreated = true;
     }
-    const windowEndMs = Math.ceil(Date.now() / (15 * 60 * 1_000)) * (15 * 60 * 1_000);
-    const pstTime = new Date(windowEndMs).toLocaleTimeString('en-GB', {
-      timeZone: 'America/Los_Angeles', hour: '2-digit', minute: '2-digit', hour12: false,
-    }).replace(':', '-');
-    return path.join(ANALYSIS_DIR, `${pstTime}_${this.pendingTicker || 'unknown'}.log`);
+    return path.join(ANALYSIS_DIR, `${this.pendingTicker || 'unknown'}.log`);
   }
 
   finalizeTick(
