@@ -3,7 +3,7 @@ import { BtcMarket } from '../services/MarketService';
 // ── Entry thresholds ─────────────────────────────────────────────────────────
 export const ENTRY_ASK_THRESHOLD  = 0.9;   // ask must exceed this to enter (YES or NO side)
 export const ENTRY_MIN_SECONDS    = 5;     // enter no closer than 5s to close (IOC buffer)
-export const ENTRY_MAX_SECONDS    = 60;    // enter only in the final 60s (settlement window)
+export const ENTRY_MAX_SECONDS    = 90;    // enter up to 90s before close
 // Win probability thresholds for side selection:
 //   winProb > 1 - ENTRY_NO_WIN_THRESHOLD (= 0.9) → buy YES
 //   winProb < ENTRY_NO_WIN_THRESHOLD      (= 0.1) → buy NO
