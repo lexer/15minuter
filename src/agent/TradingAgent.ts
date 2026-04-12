@@ -1,35 +1,33 @@
-import { MarketService, BasketballMarket } from '../services/MarketService';
+import { MarketService, BtcMarket } from '../services/MarketService';
 import { OrderService } from '../services/OrderService';
 import { PortfolioService } from '../services/PortfolioService';
-import { GameMonitor } from '../services/GameMonitor';
 import { TradingStrategy } from '../strategy/TradingStrategy';
 import { TradeHistory, TradeRecord } from '../storage/TradeHistory';
 import { AnalysisLogger } from '../storage/AnalysisLogger';
-import { KalshiWebSocket, WsTickerMessage, WsFillMessage, WsMarketPositionMessage } from '../api/KalshiWebSocket';
+import {
+  KalshiWebSocket,
+  WsTickerMessage,
+  WsFillMessage,
+  WsMarketPositionMessage,
+} from '../api/KalshiWebSocket';
 import * as crypto from 'crypto';
 
 // ── Intervals ─────────────────────────────────────────────────────────────────
-const GAME_STATE_INTERVAL_MS     = 5_000;   // NBA CDN update cadence
-const MARKET_DISCOVERY_INTERVAL_MS = 30_000; // REST: find new/closed markets
-const BALANCE_REFRESH_INTERVAL_MS  = 10_000; // REST: correct balance drift
-const RECONCILE_INTERVAL_MS        = 15_000; // REST: sanity-check positions
+const BTC_STATE_INTERVAL_MS         =  5_000; // Binance price poll cadence
+const MARKET_DISCOVERY_INTERVAL_MS  = 30_000; // REST: find new/closed markets
+const BALANCE_REFRESH_INTERVAL_MS   = 10_000; // REST: correct balance drift
+const RECONCILE_INTERVAL_MS         = 15_000; // REST: sanity-check positions
 
 export class TradingAgent {
   private running                  = false;
   private readonly analysis        = new AnalysisLogger();
   private cachedBalanceCents       = 0;
-  private startingDailyBudgetCents = 0;
   private lastLoggedBalance        = -1;
-  private readonly pendingEntries  = new Set<string>();         // prevent concurrent orders
+  private readonly pendingEntries  = new Set<string>();
   private readonly intervals: ReturnType<typeof setInterval>[] = [];
 
   // ── Fill price tracking ──────────────────────────────────────────────────────
-  // WS fill messages may arrive before or after the REST order response.
-  // We accumulate fills by orderId, and once both the fill data and trade ID are
-  // known, correct the trade record from the submitted limit price to the actual
-  // weighted-average execution price.
   private readonly fillAccumulator = new Map<string, { totalCost: number; filledContracts: number }>();
-  // orderId → { tradeId, limitPrice used when recording, expected fill count }
   private readonly orderTradeMap   = new Map<string, { tradeId: string; limitPrice: number; filledContracts: number }>();
 
   constructor(
@@ -39,41 +37,34 @@ export class TradingAgent {
     private readonly portfolio: PortfolioService,
     private readonly strategy:  TradingStrategy,
     private readonly history:   TradeHistory,
-    private readonly gameMonitor: GameMonitor,
   ) {}
 
-  // ── Lifecycle ───────────────────────────────────────────────────────────────
+  // ── Lifecycle ────────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
     this.running = true;
-    console.log('[Agent] Starting autonomous trading agent...');
+    console.log('[Agent] Starting BTC 15-min trading agent...');
     this.logSummary(this.history.getSummary(), 0);
 
-    // Initial data fetch: market discovery + balance in parallel
     const [, balance] = await Promise.all([
-      this.markets.getAllLiveBasketballMarkets(),
+      this.markets.getAllLiveBtcMarkets(),
       this.portfolio.getBalance(),
     ]);
     this.cachedBalanceCents = balance;
-    this.startingDailyBudgetCents = balance;
     this.logBalance();
 
-    // Subscribe to all discovered tickers before connecting
     const allTickers = this.markets.getCachedMarkets().map((m) => m.ticker);
     this.ws.subscribeToTickers(allTickers);
-    console.log(`[Agent] Pre-subscribed to ${allTickers.length} market ticker(s)`);
+    console.log(`[Agent] Pre-subscribed to ${allTickers.length} KXBTC15M market(s)`);
 
-    // Wire WS event handlers
     this.ws.on('ticker',          (msg) => void this.onTicker(msg));
     this.ws.on('fill',            (msg) => void this.onFill(msg));
     this.ws.on('market_position', (msg) => this.onMarketPosition(msg));
 
-    // Open WebSocket connections
     await this.ws.connect();
 
-    // Periodic background tasks
     this.intervals.push(
-      setInterval(() => void this.gameStateLoop(),      GAME_STATE_INTERVAL_MS),
+      setInterval(() => void this.btcStateLoop(),        BTC_STATE_INTERVAL_MS),
       setInterval(() => void this.marketDiscoveryLoop(), MARKET_DISCOVERY_INTERVAL_MS),
       setInterval(() => void this.balanceRefreshLoop(),  BALANCE_REFRESH_INTERVAL_MS),
       setInterval(() => void this.reconcileLoop(),       RECONCILE_INTERVAL_MS),
@@ -92,25 +83,27 @@ export class TradingAgent {
 
   private async onTicker(msg: WsTickerMessage): Promise<void> {
     const market = this.markets.applyTickerUpdate(msg);
-    if (!market || !market.isQ4) return;
-    await this.handleMarket(market);
+    if (!market) return;
+    // Handle open positions regardless of window, but only scan entries inside window
+    const openTrade = this.history.getOpenTrades().find((t) => t.ticker === market.ticker);
+    if (openTrade || market.isInTradingWindow) {
+      await this.handleMarket(market);
+    }
   }
 
   private async onFill(msg: WsFillMessage): Promise<void> {
     const price = parseFloat(msg.yes_price_dollars);
     const count = parseFloat(msg.count_fp);
     const delta = Math.round(price * count * 100);
-    // Optimistically adjust cached balance: buys cost cash, sells return it
     this.cachedBalanceCents += msg.action === 'buy' ? -delta : delta;
     console.log(
       `[Agent] FILL ${msg.market_ticker} ${msg.action} ${msg.count_fp} @ $${msg.yes_price_dollars}` +
       ` | balance≈$${(this.cachedBalanceCents / 100).toFixed(2)}`,
     );
 
-    // Accumulate buy fills for actual price correction
     if (msg.action === 'buy') {
       const acc = this.fillAccumulator.get(msg.order_id) ?? { totalCost: 0, filledContracts: 0 };
-      acc.totalCost      += price * count;
+      acc.totalCost       += price * count;
       acc.filledContracts += count;
       this.fillAccumulator.set(msg.order_id, acc);
       this.applyFillPrice(msg.order_id);
@@ -124,15 +117,14 @@ export class TradingAgent {
       ` | cost=$${msg.position_cost_dollars} | pnl=$${msg.realized_pnl_dollars}`,
     );
 
-    // Position dropped to zero — mark our open trade as externally closed immediately
     if (contracts === 0) {
       const openTrade = this.history.getOpenTrades().find((t) => t.ticker === msg.market_ticker);
       if (openTrade) {
         console.log(`[Agent] POSITION CLOSED (WS) ${msg.market_ticker} — marking trade closed`);
         this.history.updateTrade(openTrade.id, {
-          exitTime: new Date().toISOString(),
+          exitTime:   new Date().toISOString(),
           exitReason: 'manual',
-          pnl: parseFloat(msg.realized_pnl_dollars),
+          pnl:        parseFloat(msg.realized_pnl_dollars),
         });
       }
     }
@@ -140,43 +132,55 @@ export class TradingAgent {
 
   // ── Periodic background loops ────────────────────────────────────────────────
 
-  /** Re-fetch NBA game states → update win probabilities → re-evaluate Q4 markets. */
-  private async gameStateLoop(): Promise<void> {
+  /** Re-fetch BTC price → update window state + probabilities → evaluate markets. */
+  private async btcStateLoop(): Promise<void> {
     if (!this.running) return;
     try {
-      const allGames = await this.gameMonitor.getLiveGames();
-      await this.markets.refreshGameStates();
+      await this.markets.refreshBtcStates();
 
-      const q4Markets = this.markets.getCachedQ4Markets();
-      const openTrades = this.history.getOpenTrades();
-      const openPositionsCostCents = this.openPositionsCost(openTrades);
+      const btcState             = this.markets.getLatestBtcState();
+      const tradingWindowMarkets = this.markets.getCachedTradingWindowMarkets();
+      const openTrades           = this.history.getOpenTrades();
+      const openPositionsCost    = this.openPositionsCost(openTrades);
 
-      console.log(`[Agent] ${q4Markets.length} Q4 market(s) | deployed=$${(openPositionsCostCents / 100).toFixed(2)}`);
+      const btcSummary = btcState
+        ? `BTC $${btcState.currentPrice.toFixed(0)} (${btcState.priceChangeFraction >= 0 ? '+' : ''}${(btcState.priceChangeFraction * 100).toFixed(3)}%)`
+        : 'BTC N/A';
+      console.log(`[Agent] ${btcSummary} | ${tradingWindowMarkets.length} market(s) in window | deployed=$${(openPositionsCost / 100).toFixed(2)}`);
 
-      // Populate analysis tick before evaluating markets (so logMarketEval can attach signals)
       this.analysis.startTick(this.cachedBalanceCents);
-      this.analysis.logGames(allGames, this.markets.getCachedMarkets());
+      this.analysis.logBtcState(btcState, this.markets.getCachedMarkets());
       const marketMap = new Map(this.markets.getCachedMarkets().map((m) => [m.ticker, m]));
       this.analysis.logOpenPositions(openTrades, marketMap);
 
-      for (const market of q4Markets) {
+      // Evaluate markets in the trading window (entry + exit)
+      for (const market of tradingWindowMarkets) {
         await this.handleMarket(market);
       }
 
+      // Also manage exit for open positions outside the entry window
+      for (const trade of openTrades) {
+        const market = marketMap.get(trade.ticker);
+        if (market && !market.isInTradingWindow) {
+          await this.handleMarket(market);
+        }
+      }
+
       const currentOpenTrades = this.history.getOpenTrades();
-      const unrealizedPnl = this.computeUnrealizedPnl(currentOpenTrades);
+      const unrealizedPnl     = this.computeUnrealizedPnl(currentOpenTrades);
       this.logSummary(this.history.getSummary(), unrealizedPnl);
-      const hasLive = allGames.length > 0;
-      const hasOpen = currentOpenTrades.length > 0;
-      if (hasLive || hasOpen) {
+
+      const hasOpen   = currentOpenTrades.length > 0;
+      const hasWindow = tradingWindowMarkets.length > 0;
+      if (hasOpen || hasWindow || btcState) {
         this.analysis.finalizeTick(this.history.getSummary(), unrealizedPnl);
       }
     } catch (err) {
-      console.error('[Agent] gameStateLoop error:', err);
+      console.error('[Agent] btcStateLoop error:', err);
     }
   }
 
-  /** Discover new/closed KXNBAGAME markets and update WS subscriptions. */
+  /** Discover new/closed KXBTC15M markets and update WS subscriptions. */
   private async marketDiscoveryLoop(): Promise<void> {
     if (!this.running) return;
     try {
@@ -205,8 +209,7 @@ export class TradingAgent {
   private async reconcileLoop(): Promise<void> {
     if (!this.running) return;
     try {
-      const allMarkets = this.markets.getCachedMarkets();
-      await this.reconcileWithKalshi(allMarkets);
+      await this.reconcileWithKalshi(this.markets.getCachedMarkets());
     } catch (err) {
       console.error('[Agent] reconcileLoop error:', err);
     }
@@ -214,31 +217,21 @@ export class TradingAgent {
 
   // ── Core strategy evaluation ─────────────────────────────────────────────────
 
-  /**
-   * Evaluate a single Q4 market: manage exit for open positions,
-   * or scan for a new entry. Called on every ticker update and every
-   * game-state refresh.
-   */
-  private async handleMarket(market: BasketballMarket): Promise<void> {
+  private async handleMarket(market: BtcMarket): Promise<void> {
     if (!this.running) return;
     if (this.portfolio.isBudgetExhausted(this.cachedBalanceCents)) return;
 
-    const openTrades         = this.history.getOpenTrades();
-    const openPositionsCost  = this.openPositionsCost(openTrades);
-    const existingTrade      = openTrades.find((t) => t.ticker === market.ticker);
+    const openTrades   = this.history.getOpenTrades();
+    const existingTrade = openTrades.find((t) => t.ticker === market.ticker);
 
     if (existingTrade) {
       await this.managePosition(market, existingTrade);
-    } else {
-      await this.scanEntry(market, openPositionsCost);
+    } else if (market.isInTradingWindow) {
+      await this.scanEntry(market);
     }
   }
 
-  private async managePosition(
-    market: BasketballMarket,
-    record: TradeRecord,
-  ): Promise<void> {
-    // Market settled — record outcome directly
+  private async managePosition(market: BtcMarket, record: TradeRecord): Promise<void> {
     if (market.result) {
       this.strategy.clearExitConfirmation(market.ticker);
       this.recordSettlement(record, market);
@@ -246,7 +239,6 @@ export class TradingAgent {
     }
 
     const isTradeable = market.status === 'active' || market.status === 'open';
-
     if (!isTradeable) {
       console.log(`[Agent] AWAITING SETTLEMENT ${market.ticker} (status=${market.status})`);
       return;
@@ -271,10 +263,8 @@ export class TradingAgent {
       console.log(`[Agent] HOLD ${market.ticker} @ prob=${(market.winProbability * 100).toFixed(1)}%`);
       this.analysis.logDecision({ type: 'hold', ticker: market.ticker, reason: signal.reason });
 
-      // Top-up if position is below target
-      const topUp = this.strategy.evaluateTopUp(
-        market, record.contracts, this.cachedBalanceCents, this.startingDailyBudgetCents,
-      );
+      // Top-up if position is below window budget limit
+      const topUp = this.strategy.evaluateTopUp(market, record.contracts, this.cachedBalanceCents);
       if (topUp.contracts > 0) {
         console.log(`[Agent] TOP-UP ${market.ticker}: ${topUp.reason}`);
         const fill = await this.executeTopUp(record, market, topUp.contracts, market.yesAsk);
@@ -289,11 +279,10 @@ export class TradingAgent {
     }
   }
 
-  private async scanEntry(market: BasketballMarket, openPositionsCostCents: number): Promise<void> {
-    // Skip if a concurrent order is already in flight for this ticker
+  private async scanEntry(market: BtcMarket): Promise<void> {
     if (this.pendingEntries.has(market.ticker)) return;
 
-    const signal = this.strategy.evaluateEntry(market, this.cachedBalanceCents, this.startingDailyBudgetCents);
+    const signal = this.strategy.evaluateEntry(market, this.cachedBalanceCents);
     this.analysis.logMarketEval(market, signal);
 
     if (signal.action !== 'buy') {
@@ -324,7 +313,7 @@ export class TradingAgent {
   // ── Order execution ──────────────────────────────────────────────────────────
 
   private async executeEntry(
-    market: BasketballMarket,
+    market: BtcMarket,
     contracts: number,
     limitPrice: number,
   ): Promise<{ orderId: string; filledCount: number } | undefined> {
@@ -338,19 +327,18 @@ export class TradingAgent {
         console.log(`[Agent] Partial fill: ${order.filledCount}/${contracts} on ${market.ticker}`);
       }
       const record: TradeRecord = {
-        id: crypto.randomUUID(),
-        ticker: market.ticker,
-        marketTitle: market.title,
-        side: 'yes',
-        action: 'buy',
-        contracts: order.filledCount,
-        pricePerContract: limitPrice,           // overwritten by WS fill price if available
-        totalCost: order.filledCount * limitPrice,
+        id:                    crypto.randomUUID(),
+        ticker:                market.ticker,
+        marketTitle:           market.title,
+        side:                  'yes',
+        action:                'buy',
+        contracts:             order.filledCount,
+        pricePerContract:      limitPrice,
+        totalCost:             order.filledCount * limitPrice,
         winProbabilityAtEntry: market.winProbability,
-        entryTime: new Date().toISOString(),
+        entryTime:             new Date().toISOString(),
       };
       this.history.recordTrade(record);
-      // Register for WS fill price correction (fills may arrive before or after this)
       this.orderTradeMap.set(order.orderId, { tradeId: record.id, limitPrice, filledContracts: order.filledCount });
       this.applyFillPrice(order.orderId);
       console.log(`[Agent] Bought ${order.filledCount} YES on ${market.ticker} @ $${limitPrice.toFixed(2)} | orderId=${order.orderId}`);
@@ -365,7 +353,7 @@ export class TradingAgent {
 
   private async executeTopUp(
     record: TradeRecord,
-    market: BasketballMarket,
+    market: BtcMarket,
     contracts: number,
     limitPrice: number,
   ): Promise<{ orderId: string; filledCount: number } | undefined> {
@@ -375,18 +363,17 @@ export class TradingAgent {
         console.log(`[Agent] Top-up ${order.orderId} unfilled`);
         return { orderId: order.orderId, filledCount: 0 };
       }
-      // Update contract count and cost at limit price; applyFillPrice will correct the cost
       const addedCost    = order.filledCount * limitPrice;
       const newContracts = record.contracts + order.filledCount;
       const newAvgPrice  = (record.totalCost + addedCost) / newContracts;
       this.history.updateTrade(record.id, {
-        contracts: newContracts,
+        contracts:        newContracts,
         pricePerContract: newAvgPrice,
-        totalCost: record.totalCost + addedCost,
+        totalCost:        record.totalCost + addedCost,
       });
       this.orderTradeMap.set(order.orderId, { tradeId: record.id, limitPrice, filledContracts: order.filledCount });
       this.applyFillPrice(order.orderId);
-      console.log(`[Agent] TOP-UP filled ${order.filledCount}/${contracts} on ${record.ticker} @ $${limitPrice.toFixed(2)} | total=${newContracts} | orderId=${order.orderId}`);
+      console.log(`[Agent] TOP-UP filled ${order.filledCount}/${contracts} on ${record.ticker} @ $${limitPrice.toFixed(2)} | total=${newContracts}`);
       return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
       console.error(`[Agent] Failed to top-up ${record.ticker}:`, err);
@@ -398,7 +385,7 @@ export class TradingAgent {
 
   private async executeExit(
     record: TradeRecord,
-    market: BasketballMarket,
+    market: BtcMarket,
     limitPrice: number,
   ): Promise<{ orderId: string; filledCount: number } | undefined> {
     try {
@@ -414,13 +401,13 @@ export class TradingAgent {
       const pnl = this.strategy.calculatePnl(record.pricePerContract, limitPrice, order.filledCount);
       if (order.filledCount === record.contracts) {
         this.history.updateTrade(record.id, {
-          exitTime: new Date().toISOString(),
+          exitTime:             new Date().toISOString(),
           winProbabilityAtExit: market.winProbability,
           pnl,
-          exitReason: market.status !== 'open' ? 'game_over' : 'probability_drop',
+          exitReason:           market.status !== 'open' ? 'game_over' : 'probability_drop',
         });
       }
-      console.log(`[Agent] Sold ${order.filledCount} on ${record.ticker} @ $${limitPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)} | orderId=${order.orderId}`);
+      console.log(`[Agent] Sold ${order.filledCount} on ${record.ticker} @ $${limitPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
       return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
       console.error(`[Agent] Failed to sell ${record.ticker}:`, err);
@@ -429,31 +416,35 @@ export class TradingAgent {
 
   // ── Settlement & reconciliation ──────────────────────────────────────────────
 
-  private recordSettlement(record: TradeRecord, market: BasketballMarket): void {
-    const won  = market.result === record.side;
-    const pnl  = this.strategy.calculatePnl(record.pricePerContract, won ? 1.0 : 0.0, record.contracts);
+  private recordSettlement(record: TradeRecord, market: BtcMarket): void {
+    const won = market.result === record.side;
+    const pnl = this.strategy.calculatePnl(record.pricePerContract, won ? 1.0 : 0.0, record.contracts);
     this.history.updateTrade(record.id, {
-      exitTime: new Date().toISOString(),
+      exitTime:             new Date().toISOString(),
       winProbabilityAtExit: won ? 1.0 : 0.0,
       pnl,
-      exitReason: 'game_over',
-      gameCompleted: true,
-      gameResult: won ? 'win' : 'loss',
+      exitReason:           'game_over',
+      gameCompleted:        true,
+      gameResult:           won ? 'win' : 'loss',
     });
     console.log(`[Agent] SETTLED ${record.ticker} result=${market.result} | ${won ? 'WON' : 'LOST'} | PnL: $${pnl.toFixed(2)}`);
-    this.analysis.logDecision({ type: 'exit', ticker: record.ticker,
-      reason: `Market settled: result=${market.result}`, contracts: record.contracts, price: won ? 1.0 : 0.0 });
+    this.analysis.logDecision({
+      type: 'exit', ticker: record.ticker,
+      reason: `Market settled: result=${market.result}`,
+      contracts: record.contracts,
+      price: won ? 1.0 : 0.0,
+    });
   }
 
-  private async reconcileWithKalshi(allMarkets: BasketballMarket[]): Promise<void> {
+  private async reconcileWithKalshi(allMarkets: BtcMarket[]): Promise<void> {
     try {
       const [portfolio, openOrders] = await Promise.all([
         this.portfolio.getPortfolio(),
         this.portfolio.getOpenOrders(),
       ]);
-      const openTrades    = this.history.getOpenTrades();
+      const openTrades     = this.history.getOpenTrades();
       const trackedTickers = new Set(openTrades.map((t) => t.ticker));
-      const marketMap     = new Map(allMarkets.map((m) => [m.ticker, m]));
+      const marketMap      = new Map(allMarkets.map((m) => [m.ticker, m]));
 
       // Adopt external positions
       for (const pos of portfolio.positions) {
@@ -479,10 +470,9 @@ export class TradingAgent {
         }
       }
 
-      // Log unexpected resting orders
       for (const order of openOrders) {
         if (marketMap.has(order.ticker)) {
-          console.log(`[Agent] EXTERNAL RESTING ORDER: ${order.ticker} | ${order.action} ${order.side} x${order.remaining_count_fp} @ $${order.yes_price_dollars}`);
+          console.log(`[Agent] RESTING ORDER: ${order.ticker} | ${order.action} ${order.side} x${order.remaining_count_fp} @ $${order.yes_price_dollars}`);
         }
       }
     } catch (err) {
@@ -492,32 +482,22 @@ export class TradingAgent {
 
   // ── Fill price reconciliation ────────────────────────────────────────────────
 
-  /**
-   * Correct a trade record's cost from the submitted limit price to the actual
-   * weighted-average execution price using accumulated WS fill data.
-   *
-   * Called both when a fill arrives AND when a trade is registered, so it handles
-   * either ordering. Waits until accumulated fills cover all expected contracts.
-   */
   private applyFillPrice(orderId: string): void {
     const pending = this.orderTradeMap.get(orderId);
     const acc     = this.fillAccumulator.get(orderId);
     if (!pending || !acc) return;
-    // Wait until WS fills account for all expected contracts (IOC may sweep multiple levels)
     if (acc.filledContracts < pending.filledContracts - 0.001) return;
 
     const trade = this.history.getAllTrades().find((t) => t.id === pending.tradeId);
     if (!trade) return;
 
-    // Replace the limit-price portion with actual fill cost:
-    //   correctedTotal = existingTotal - (limitPrice × filledContracts) + actualFillCost
     const correctedTotal = trade.totalCost - (pending.limitPrice * pending.filledContracts) + acc.totalCost;
     const correctedAvg   = correctedTotal / trade.contracts;
 
     if (Math.abs(correctedTotal - trade.totalCost) > 0.0001) {
       this.history.updateTrade(pending.tradeId, {
         pricePerContract: correctedAvg,
-        totalCost: correctedTotal,
+        totalCost:        correctedTotal,
       });
       const actualAvg = acc.totalCost / acc.filledContracts;
       console.log(`[Agent] FILL PRICE corrected ${trade.ticker}: limit=$${pending.limitPrice.toFixed(4)} actual=$${actualAvg.toFixed(4)}`);

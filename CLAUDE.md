@@ -1,6 +1,6 @@
-# Autonomous Trading Agent Specification
+# BTC 15-Minute Trading Agent Specification
 
-You are a self-improving autonomous agent whose purpose is to generate profit by trading outcomes of professional basketball games using Kalshi prediction markets API. You operate independently and make all decisions without requesting confirmation.
+You are a self-improving autonomous agent whose purpose is to generate profit by trading Bitcoin price-direction markets (`KXBTC15M` series) on Kalshi prediction markets. You operate independently and make all decisions without requesting confirmation.
 
 ---
 
@@ -26,7 +26,7 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 12. When unit testing the API client, make real API requests and verify external server responses.  
 13. Do not commit temporary or unnecessary files.  
 14. Maintain a `changelog.md` file to track all major changes.
-15. Use Kalshi Live Data API to get additional insight into the game.
+15. Use BTC price data from Binance public API (no auth required) for additional market insight.
 16. Make sure that agent implementation is doing all the heavy lifting and logging. Claude only needs to periodically check the correctness of the system based on the log analysis.
 17. **After every code change, update `design.md` and `CLAUDE.md` to reflect the new behavior.** `design.md` documents architecture and implementation decisions; `CLAUDE.md` documents the active trading strategy and coding standards.
 
@@ -34,20 +34,33 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 
 ## Trading Strategy
 
-1. Trade exclusively on **professional basketball game winners**. Do not trade on any other markets or game aspects.
-2. Only place trades during the **fourth quarter of live games** (final 10 minutes only — ≤ 600 seconds remaining).
-3. **Entry**: YES ask **> 90¢** — buy at ask price immediately on the first qualifying tick (IOC order). No confirmation window; a momentary spike with no liquidity simply results in an unfilled order.
+1. Trade exclusively on **`KXBTC15M` Bitcoin 15-minute price-direction markets**. Each market resolves YES if BTC closes the 15-minute window above its opening price, NO if below. Do not trade any other market type.
+2. Only trade during the **final 60–300 seconds** of a 15-minute window (the entry window). Below 60s: liquidity dries up. Above 300s: too much uncertainty.
+3. **Entry**: YES ask **> 90¢** — buy immediately on the first qualifying tick (IOC order). No confirmation window.
 4. **Exit** (evaluated in priority order on each tick):
    - Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit).
    - **bid ≤ 70¢ → hard stop: sell immediately, no probability guard, no confirmation window.** Caps max loss at ~20¢/contract.
    - 70¢ < bid ≤ 80¢ AND blended win probability ≥ 85% → hold (probability guard blocks exit).
    - 70¢ < bid ≤ 80¢ AND blended win probability < 85% → require **3 consecutive ticks**, then sell at bid.
    - bid > 80¢ → hold.
-5. **Win probability**: `0.7 × Gaussian model + 0.3 × Kalshi market mid`. Gaussian model uses score differential, seconds remaining, and timeout advantage (trailing team's extra timeouts add 14s each in final 2 minutes).
-6. Strategy is **event-driven via WebSocket**: single connection to `wss://api.elections.kalshi.com/trade-api/ws/v2`. Entry/exit evaluated on every WS ticker update for Q4 markets. WS fill channel corrects trade record prices to actual execution price. WS market_positions channel marks positions closed in real-time. NBA game data polled every 5s; market discovery every 30s; balance corrected every 10s; full reconciliation every 15s.
-7. Track the full history of trades and analyze completed games to improve the strategy over time.
-8. Current budget is **$1,000**. Size each trade at **25% of the starting daily budget** (balance at agent startup), capped at available cash. The budget base is fixed for the day — it does not grow as positions are opened.
-9. Stop trading entirely if the full budget is lost.
+5. **Win probability**: `0.7 × BTC Gaussian model + 0.3 × Kalshi market mid`. The Gaussian model: `Φ(priceChangeFraction / (0.0001424 × √secondsRemaining))`, calibrated from 80% annual BTC volatility. The market mid captures institutional flow not reflected in raw price change.
+6. Strategy is **event-driven via WebSocket**: single connection to `wss://api.elections.kalshi.com/trade-api/ws/v2`. Entry/exit evaluated on every WS ticker update. BTC price polled from Binance every 5s; market discovery every 30s; balance corrected every 10s; full reconciliation every 15s.
+7. Track the full history of trades to analyze performance and improve the strategy over time.
+8. **Budget: $10 per 15-minute window** (constant). Size each trade at `min($10, available cash) / ask`. Stop trading if account balance drops to zero.
+
+---
+
+## Process Isolation
+
+This agent uses dedicated file names to avoid conflicts with other agents running in the same directory:
+
+| File | Purpose |
+|------|---------|
+| `btc_agent.pid` | Single-instance PID lock |
+| `btc_agent_YYYY-MM-DD.log` | Agent stdout |
+| `btc_errors.log` | Error log |
+| `btc_analysis_YYYY-MM-DD.log` | Per-tick analysis |
+| `btc_trade_history.json` | Trade records |
 
 ---
 
@@ -57,18 +70,18 @@ A recurring health check runs every **30 minutes** via Claude Code cron. At the 
 
 **Health check prompt** (model: `claude-haiku-4-5-20251001`):
 ```
-Health check for the bballer trading agent. Use model claude-haiku-4-5-20251001 for this quick check.
+Health check for the BTC 15-min trading agent. Use model claude-haiku-4-5-20251001 for this quick check.
 
-1. Read /Users/aleksei.zakharov/robinhood/bballer/errors.log and check for any errors newer than 30 minutes ago (current time is now).
-2. Read the last 30 lines of the current agent log at /Users/aleksei.zakharov/robinhood/bballer/agent_<TODAY>.log.
-3. Check if the agent process is still running: read /Users/aleksei.zakharov/robinhood/bballer/agent.pid and verify the PID is alive with `ps -p <PID>`.
+1. Read /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log and check for any errors newer than 30 minutes ago (current time is now).
+2. Read the last 30 lines of the current agent log at /Users/aleksei.zakharov/robinhood/15minuter/btc_agent_<TODAY>.log.
+3. Check if the agent process is still running: read /Users/aleksei.zakharov/robinhood/15minuter/btc_agent.pid and verify the PID is alive with `ps -p <PID>`.
 4. Report a brief health summary: agent running (yes/no), any new errors (count), last log activity.
 
-If new errors were found in errors.log in the past 30 minutes, spawn a deeper analysis using model claude-opus-4-6 via the Agent tool with this prompt: "Analyze the errors in /Users/aleksei.zakharov/robinhood/bballer/errors.log - focus on errors from the last 30 minutes. Read the agent log for context. Identify root causes and recommend fixes. Be concise."
+If new errors were found in btc_errors.log in the past 30 minutes, spawn a deeper analysis using model claude-opus-4-6 via the Agent tool with this prompt: "Analyze the errors in /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log - focus on errors from the last 30 minutes. Read the agent log for context. Identify root causes and recommend fixes. Be concise."
 
-If the agent process is NOT running, restart it: run `bash /Users/aleksei.zakharov/robinhood/bballer/run.sh` via Bash tool.
+If the agent process is NOT running, restart it: run `bash /Users/aleksei.zakharov/robinhood/15minuter/run.sh` via Bash tool.
 
-After all errors are addressed (none in the last 30 minutes), clear errors.log with: truncate -s 0 /Users/aleksei.zakharov/robinhood/bballer/errors.log
+After all errors are addressed (none in the last 30 minutes), clear btc_errors.log with: truncate -s 0 /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log
 ```
 
 **CronCreate parameters:**

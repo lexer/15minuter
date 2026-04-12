@@ -5,7 +5,7 @@ import * as path from 'path';
 dotenv.config();
 
 // ── Single-instance lock via PID file ────────────────────────────────────────
-const PID_FILE = path.resolve(process.cwd(), 'agent.pid');
+const PID_FILE = path.resolve(process.cwd(), 'btc_agent.pid');
 
 import { execSync } from 'child_process';
 
@@ -23,12 +23,11 @@ function acquireLock(): void {
     const existingPid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
     if (!isNaN(existingPid) && existingPid !== process.pid) {
       try {
-        process.kill(existingPid, 0); // throws if process does not exist
+        process.kill(existingPid, 0);
         if (isAgentProcess(existingPid)) {
-          console.error(`[Main] Agent already running (PID ${existingPid}). Exiting.`);
+          console.error(`[Main] BTC agent already running (PID ${existingPid}). Exiting.`);
           process.exit(1);
         }
-        // PID exists but belongs to a different process — stale, overwrite
       } catch {
         // Stale PID file — previous process is gone, safe to overwrite
       }
@@ -45,14 +44,15 @@ acquireLock();
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Redirect stdout to a PST-dated agent log; stderr to a dedicated errors.log
-const pstDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-const logPath = path.resolve(process.cwd(), `agent_${pstDate}.log`);
-const errorLogPath = path.resolve(process.cwd(), 'errors.log');
+const pstDate      = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+const logPath      = path.resolve(process.cwd(), `btc_agent_${pstDate}.log`);
+const errorLogPath = path.resolve(process.cwd(), 'btc_errors.log');
 
-const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+const logStream   = fs.createWriteStream(logPath, { flags: 'a' });
 const errorStream = fs.createWriteStream(errorLogPath, { flags: 'a' });
 
 process.stdout.write = logStream.write.bind(logStream);
+
 function isTransientNetworkError(msg: string): boolean {
   return (
     msg.includes('ENOTFOUND') ||
@@ -68,10 +68,10 @@ function isTransientNetworkError(msg: string): boolean {
 }
 
 process.stderr.write = (chunk: string | Uint8Array, ...args: unknown[]) => {
-  const ts = new Date().toISOString();
+  const ts   = new Date().toISOString();
   const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8');
   const line = `[${ts}] ${text}`;
-  logStream.write(line);  // always mirror to agent log for context
+  logStream.write(line);
   if (!isTransientNetworkError(text)) {
     errorStream.write(line);
   }
@@ -93,10 +93,10 @@ process.on('exit', cleanup);
 import * as crypto from 'crypto';
 import { KalshiClient } from './api/KalshiClient';
 import { KalshiWebSocket } from './api/KalshiWebSocket';
+import { BtcPriceMonitor } from './services/BtcPriceMonitor';
 import { MarketService } from './services/MarketService';
 import { OrderService } from './services/OrderService';
 import { PortfolioService } from './services/PortfolioService';
-import { GameMonitor } from './services/GameMonitor';
 import { TradingStrategy } from './strategy/TradingStrategy';
 import { TradeHistory } from './storage/TradeHistory';
 import { TradingAgent } from './agent/TradingAgent';
@@ -108,17 +108,17 @@ function main(): void {
   }
 
   const privateKeyPath = path.resolve(process.cwd(), 'private_key.pem');
-  const privateKeyPem = fs.readFileSync(privateKeyPath, 'utf-8');
-  const privateKey = crypto.createPrivateKey(privateKeyPem);
+  const privateKeyPem  = fs.readFileSync(privateKeyPath, 'utf-8');
+  const privateKey     = crypto.createPrivateKey(privateKeyPem);
 
-  const client = new KalshiClient(keyId, privateKeyPath);
-  const ws = new KalshiWebSocket(keyId, privateKey);
-  const gameMonitor = new GameMonitor();
-  const marketService = new MarketService(client, gameMonitor);
-  const orderService = new OrderService(client);
+  const client         = new KalshiClient(keyId, privateKeyPath);
+  const ws             = new KalshiWebSocket(keyId, privateKey);
+  const btcMonitor     = new BtcPriceMonitor();
+  const marketService  = new MarketService(client, btcMonitor);
+  const orderService   = new OrderService(client);
   const portfolioService = new PortfolioService(client);
-  const strategy = new TradingStrategy();
-  const history = new TradeHistory();
+  const strategy       = new TradingStrategy();
+  const history        = new TradeHistory(path.resolve(process.cwd(), 'btc_trade_history.json'));
 
   const agent = new TradingAgent(
     ws,
@@ -127,7 +127,6 @@ function main(): void {
     portfolioService,
     strategy,
     history,
-    gameMonitor,
   );
 
   const shutdown = (signal: string) => {
@@ -137,7 +136,7 @@ function main(): void {
     process.exit(0);
   };
 
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   agent.start().catch((err) => {

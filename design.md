@@ -1,8 +1,10 @@
-# Design Document — bballer Autonomous Trading Agent
+# Design Document — BTC 15-Minute Trading Agent
 
 ## Overview
 
-`bballer` is an autonomous TypeScript agent that trades professional basketball game-winner markets on Kalshi prediction markets. It runs a 1-second polling loop, identifies live NBA games in their fourth quarter, and enters/exits YES positions based on a blended win probability model.
+Autonomous TypeScript agent that trades `KXBTC15M` Bitcoin price-direction markets on Kalshi. Each market is a 15-minute binary: YES resolves to $1 if BTC closes the window above its open price, NO if below. The agent enters late in the window (final 1–5 minutes) when the outcome is highly probable but unexpired upside remains.
+
+Process isolation: all files use the `btc_` prefix (`btc_agent.pid`, `btc_agent_YYYY-MM-DD.log`, `btc_errors.log`, `btc_trade_history.json`) so the agent can run alongside other Kalshi agents in the same directory.
 
 ---
 
@@ -12,22 +14,22 @@
 src/
   api/
     KalshiClient.ts        — RSA-PSS authenticated HTTP client for Kalshi REST API
-    KalshiWebSocket.ts     — Single multiplexed WS connection (ticker + fill + market_positions)
-    types.ts               — All Kalshi API request/response types
+    KalshiWebSocket.ts     — Multiplexed WS (ticker + fill + market_positions); 45s watchdog
+    types.ts               — Kalshi API types
   services/
-    MarketService.ts       — Discovers and parses basketball game-winner markets; computes blended win probability; maintains in-memory market cache updated by WS
-    GameMonitor.ts         — Polls NBA Live Data CDN for scores, clocks, and timeouts
-    WinProbabilityModel.ts — Gaussian random-walk win probability (Clauset 2015) with timeout adjustment
+    BtcPriceMonitor.ts     — Polls Binance for BTC/USDT 15-min candle + spot price (5s TTL)
+    BtcProbabilityModel.ts — Gaussian model: P(BTC stays above window open | change%, time left)
+    MarketService.ts       — Discovers KXBTC15M markets; computes blended probability; cache
     OrderService.ts        — Places limit orders (IOC)
-    PortfolioService.ts    — Reads balance and open positions
+    PortfolioService.ts    — Balance and open positions
   strategy/
-    TradingStrategy.ts     — Entry/exit signal logic; Kelly position sizing
+    TradingStrategy.ts     — Entry/exit signals; $10/window budget sizing
   storage/
-    TradeHistory.ts        — Persists trade records to trade_history.json
-    AnalysisLogger.ts      — Writes per-tick JSON-lines analysis log (PST-dated)
+    TradeHistory.ts        — Persists trade records to btc_trade_history.json
+    AnalysisLogger.ts      — Per-tick JSON-lines analysis log (btc_analysis_YYYY-MM-DD.log)
   agent/
-    TradingAgent.ts        — Event-driven agent; orchestrates all components via WS events + setInterval loops
-  index.ts                 — Entry point; wires dependencies; redirects stdout to PST-dated agent log
+    TradingAgent.ts        — Event-driven orchestrator: WS events + periodic loops
+  index.ts                 — Entry point; PID lock (btc_agent.pid); log redirection
 ```
 
 ---
@@ -35,90 +37,89 @@ src/
 ## Key Design Decisions
 
 ### 1. RSA-PSS Authentication
-Kalshi's trade API requires RSA-PSS signatures on every authenticated request. The message is `{timestamp_ms}{METHOD}{/trade-api/v2/path}` (no query string in signed path). `KALSHI_API_KEY` holds the key UUID; the private key lives in `private_key.pem` (never committed).
+Kalshi requires RSA-PSS signatures. Message: `{timestamp_ms}{METHOD}{/trade-api/v2/path}`. `KALSHI_API_KEY` holds the key UUID; private key in `private_key.pem` (never committed). Same scheme for WebSocket upgrade headers.
 
-The same RSA-PSS scheme applies to WebSocket connections: sign `{timestamp_ms}GET/trade-api/ws/v2` and pass the three headers (`KALSHI-ACCESS-KEY`, `KALSHI-ACCESS-SIGNATURE`, `KALSHI-ACCESS-TIMESTAMP`) in the WebSocket upgrade request.
+### 2. WebSocket Watchdog
+45-second inactivity watchdog resets on every inbound frame. If Kalshi's 10s heartbeat misses ~4 beats, the socket is terminated and reconnected with fresh auth. Avoids false positives from asymmetric network latency.
 
-### 2. WebSocket Keep-Alive (Watchdog)
-Kalshi sends a WebSocket `ping` frame with body `"heartbeat"` every 10 seconds. The `ws` library automatically responds with a `pong` frame (RFC 6455). We do not send our own outgoing pings.
+### 3. BTC Price Data — Binance
+`BtcPriceMonitor` polls two public Binance endpoints every 5 seconds (no API key needed):
+- `GET /api/v3/klines?symbol=BTCUSDT&interval=15m&limit=1` → current 15-min candle open price
+- `GET /api/v3/ticker/price?symbol=BTCUSDT` → latest spot price
 
-Instead, a 45-second inactivity watchdog is reset on every inbound frame (both `message` and `ping` events). If nothing arrives for 45 seconds — meaning Kalshi's heartbeat missed ~4 consecutive beats — the socket is terminated and reconnected with fresh auth headers. This avoids false-positive reconnects from asymmetric network conditions that plagued the earlier outgoing-ping approach.
+Binance 15-min candles align with Kalshi's `KXBTC15M` windows. The candle open price is the reference: if the current price is above the open, the YES market resolves $1.
 
-### 3. Price Representation
-Kalshi prices are integers 0–100 (cents). All internal prices are normalized to 0.0–1.0 floats immediately on parsing.
-
-### 4. Win Probability — Blended Model
-Win probability combines a Gaussian random-walk model with the Kalshi market mid-price:
-
+### 4. BTC Probability Model — Gaussian Random Walk
 ```
-winProbability = 0.7 × Gaussian(scoreDiff, secondsLeft, timeouts)
-              + 0.3 × (kalshiBid + kalshiAsk) / 2
+priceChangeFraction = (currentPrice − windowOpenPrice) / windowOpenPrice
+σ(T) = SIGMA_PER_SQRT_SECOND × √T          (T = seconds remaining)
+z    = priceChangeFraction / σ(T)
+prob = Φ(z)                                  (standard normal CDF)
 ```
 
-The Gaussian model (Clauset 2015): `Φ(scoreDiff / (0.22 × √secondsLeft))` models each possession as a random step. In the final 2 minutes, the trailing team's extra timeouts add 14s of effective game time per timeout advantage (timeout adjustment).
+`SIGMA_PER_SQRT_SECOND = 0.0001424` calibrated from BTC annual volatility ≈ 80%:
+`σ_per_√second = 0.80 / √(365 × 24 × 3600) ≈ 0.0001424`
 
-The 70/30 blend was calibrated via backtest on 2026-04-06 game data: it exits losing positions ~2 minutes earlier than the pure model with no false exits on winning positions.
+Example: BTC up 0.5% with 120s left → σ(120) ≈ 0.00156 → z ≈ 3.21 → prob ≈ 99.9%.
 
-### 5. Entry Criteria
+### 5. Blended Win Probability
+```
+winProbability = 0.3 × marketMid + 0.7 × btcGaussianModel
+```
+Market mid captures order-book information (institutional participants, funding rate effects) that the pure price-change model misses.
+
+### 6. Trading Window — Entry and Market Discovery
+Only trade in the final **60–300 seconds** of each 15-minute window:
+- Below 60s: too close to expiry, spread widens and liquidity dries up
+- Above 300s: too much time left, uncertainty too high even at >90¢ ask
+
+`isInTradingWindow = secondsLeft ∈ [60, 300]` is computed from `market.closeTime - Date.now()`.
+
+### 7. Entry Criteria
 1. Market must be `active` or `open`
-2. Game state available from NBA Live Data
-3. ≤ 600 seconds remaining (final 10 minutes only)
-4. YES ask **> 90¢** — buy immediately on the first qualifying tick
-5. Size: `25% × startingDailyBudget`, capped at available cash
+2. `isInTradingWindow = true`
+3. YES ask **> 90¢**
+4. Size: `min($10 window budget, available cash) / ask` contracts
 
-No confirmation window: IOC order semantics make it redundant — a momentary ask spike with no real liquidity simply results in an unfilled order, not a bad fill. Removing the window eliminates 2s of latency and the need for a price-drift guard.
+No confirmation window. IOC order semantics: a momentary ask spike with no real liquidity results in an unfilled order, not a bad fill.
 
-### 6. Exit Criteria
-
-Checks are evaluated in priority order on every tick:
-
-1. Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit, overrides probability guard)
-2. **bid ≤ 70¢ → hard stop: sell immediately, no probability guard, no confirmation window**
-3. 70¢ < bid ≤ 80¢ AND blended winProbability ≥ 85% → hold (probability guard blocks soft exit)
-4. 70¢ < bid ≤ 80¢ AND blended winProbability < 85% → require **3 consecutive ticks**, then sell at bid
+### 8. Exit Criteria (evaluated in priority order each tick)
+1. Single-tick bid crash ≥ 15¢ → emergency exit (overrides probability guard)
+2. **bid ≤ 70¢ → hard stop: sell immediately, no guard, no confirmation**
+3. 70¢ < bid ≤ 80¢ AND prob ≥ 85% → hold (probability guard)
+4. 70¢ < bid ≤ 80¢ AND prob < 85% → require 3 consecutive ticks, then sell
 5. bid > 80¢ → hold
 
-The hard stop caps the worst-case loss on a single trade at ~20¢/contract (entry >90¢, hard stop at 70¢). The probability guard only applies in the 70–80¢ soft zone, preventing premature exits while the model still shows high confidence.
+Worst-case loss per contract: entry at >90¢, hard stop at 70¢ = ~20¢.
 
-### 7. Position Sizing
-Size is `min(25% × startingDailyBudget, availableCash)`. The budget is fixed at the cash balance recorded at agent startup each day and does not change as positions are opened or settled. This prevents the compounding over-leverage that occurred on 2026-04-10 when using `cash + open positions` as the base, which allowed 6 concurrent positions to push total exposure to 3.4× the starting balance.
+Also exits open positions that fall outside the trading window (e.g., a position entered with 90s left is still managed for exit when secondsLeft < 60 or market settles).
 
-The Kelly fraction is computed to confirm positive edge exists before entry, but sizing uses the flat 25% fraction regardless of Kelly magnitude.
+### 9. Position Sizing — Window Budget
+Budget = **$10 per 15-minute window** (constant, not derived from account balance).
+```
+maxSpendCents = min(WINDOW_BUDGET_CENTS = 1000, availableBalanceCents)
+contracts     = floor(maxSpendCents / askCents)
+```
+Top-up logic: if a partially-filled entry is below the window budget target, additional contracts are bought on subsequent ticks while still in the entry window and ask is above threshold.
 
-If a buy order is rejected with `insufficient_balance`, `cachedBalanceCents` is immediately zeroed so subsequent ticks skip entry rather than retrying every second.
+### 10. Process Isolation
+All runtime files use the `btc_` prefix to avoid collisions with other agents:
 
-### 8. Market Discovery
-Basketball game-winner markets are discovered via the `KXNBAGAME` series ticker. Each event ticker encodes date and team codes (e.g. `KXNBAGAME-26APR06HOUGSW`). Team codes are mapped from Kalshi 3-letter codes to NBA tricodes via a static lookup table.
+| File | Purpose |
+|------|---------|
+| `btc_agent.pid` | Single-instance lock |
+| `btc_agent_YYYY-MM-DD.log` | Agent stdout (PST-dated) |
+| `btc_errors.log` | Errors (transient network errors excluded) |
+| `btc_analysis_YYYY-MM-DD.log` | Per-tick JSON-lines analysis log |
+| `btc_trade_history.json` | All trade records |
 
-### 9. NBA Live Data
-Game state (score, clock, period, timeouts) is fetched from the NBA CDN every 5 seconds:
-- Scoreboard: `https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json`
-- Boxscore per game: `https://cdn.nba.com/static/json/liveData/boxscore/boxscore_{gameId}.json`
-
-Timeout counts are used to adjust effective seconds remaining in the final 2 minutes.
-
-### 10. Logging
-Two PST-dated log files are written per game day:
-
-| File | Format | Content |
-|------|--------|---------|
-| `agent_YYYY-MM-DD.log` | Plain text | All console output; PST date captured at process startup |
-| `analysis_YYYY-MM-DD.log` | JSON-lines | Per-tick structured data: games, markets, signals, decisions, open positions, summary |
-
-Both use **PST (America/Los_Angeles)** timezone for date grouping — one file per NBA game day. The analysis log rolls over at PST midnight each tick; the agent log uses the PST date at startup.
-
-Analysis log compaction rules:
-- Only games with `gameStatus === 2` (live) are included
-- `decisions` array omitted when empty; hold-type decisions never logged (redundant with `signal` in market snapshots)
-- `openPositions` array omitted when empty
-- Signal/reason fields skipped on blowout markets (ask ≤ 10¢ or ≥ 99¢)
-- Win probability rounded to 4 decimal places; PnL to 2dp
-
-### PnL Tracking
-`TradeHistory` tracks `realizedPnl` (closed trades only). Each game-state tick also computes `unrealizedPnl` for open positions using the current `yesBid` price as the liquidation value: `Σ (yesBid − entryPrice) × contracts`. Both values are logged to the agent console and included in the analysis log tick summary as `realizedPnl`, `unrealizedPnl`, and `totalPnl`.
-
-### 11. Dependency Injection
-All services accept dependencies through the constructor for unit-testable components. The live API integration test suite makes real Kalshi API requests to verify authentication and response shapes.
+### 11. Logging
+The analysis log (`btc_analysis_YYYY-MM-DD.log`) writes one JSON-lines entry per 5s tick including:
+- BTC state: `currentPrice`, `windowOpenPrice`, `priceChangePct`
+- Market snapshots: `ticker`, `winProbability`, `ask`, `bid`, `secondsLeft`
+- Entry/exit decisions with fill status and order ID
+- Open positions with unrealized PnL
+- Summary: `totalTrades`, `realizedPnl`, `unrealizedPnl`, `winRate`
 
 ---
 
@@ -126,23 +127,22 @@ All services accept dependencies through the constructor for unit-testable compo
 
 ```
 [on start]
-REST: getAllLiveBasketballMarkets() + getBalance() in parallel
-WS: connect to wss://api.elections.kalshi.com/trade-api/ws/v2
-WS: subscribe to fill, market_positions, and all discovered tickers
+  REST: getAllLiveBtcMarkets() + getBalance() in parallel
+  WS:   connect to wss://api.elections.kalshi.com/trade-api/ws/v2
+  WS:   subscribe fill, market_positions, all discovered tickers
 
-[on WS ticker message]  ← real-time bid/ask, no polling latency
-  applyTickerUpdate() → recompute blended win prob
-  if Q4 market: handleMarket()
-    open position? → managePosition() (exit check + top-up)
-    no position?   → scanEntry()
+[on WS ticker message]
+  applyTickerUpdate() → recompute secondsLeft + blended prob
+  if open position OR isInTradingWindow: handleMarket()
 
-[every 5s — gameStateLoop]
-  REST: refreshGameStates() (NBA CDN)
-  for each Q4 market: handleMarket()
-  write analysis tick to analysis_YYYY-MM-DD.log
+[every 5s — btcStateLoop]
+  Binance: refreshBtcStates()
+  for each trading-window market: handleMarket()
+  for each open position outside window: handleMarket() (exit only)
+  write btc_analysis tick
 
 [every 30s — marketDiscoveryLoop]
-  REST: discoverMarkets() → WS subscribe/unsubscribe new/removed tickers
+  REST: discoverMarkets() → WS subscribe/unsubscribe
 
 [every 10s — balanceRefreshLoop]
   REST: getBalance() to correct WS-optimistic drift
@@ -151,25 +151,11 @@ WS: subscribe to fill, market_positions, and all discovered tickers
   REST: getPortfolio() + getOpenOrders()
   adopt external positions; detect external closes
 
-[on WS fill message]
-  optimistically adjust cachedBalanceCents
-
-[on WS market_position message]
-  log position update
+[on WS fill]     optimistically adjust cachedBalanceCents; correct fill price in TradeHistory
+[on WS position] detect real-time position close; mark trade closed
 ```
 
 ---
 
-## Persistence
-
-| File | Purpose |
-|------|---------|
-| `trade_history.json` | All trade records with entry/exit prices, PnL, timestamps |
-| `analysis_YYYY-MM-DD.log` | Per-tick market snapshots for post-game analysis |
-| `agent_YYYY-MM-DD.log` | Full agent console output |
-
-`trade_history.json` and `*.log` files are excluded from git.
-
-## Tools
-
-`scripts/backtest_blend.py` — Simulates exit logic against a saved analysis log for a set of known trades, sweeping blend weights. Used to calibrate the 70/30 model/market blend. Edit `TRADES` and `LOG_FILE` constants to run against new game data.
+## Fill Price Correction
+WS fill messages arrive before or after the REST order response. The `fillAccumulator` map accumulates fills by `orderId`; `orderTradeMap` maps `orderId` to `tradeId`. Once accumulated fills match the expected contract count, the trade record is corrected from the submitted limit price to the actual weighted-average execution price.

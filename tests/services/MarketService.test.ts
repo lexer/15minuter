@@ -1,147 +1,137 @@
-import { MarketService } from '../../src/services/MarketService';
-import { GameMonitor, NbaGameState } from '../../src/services/GameMonitor';
-import { KalshiMarket } from '../../src/api/types';
+import { MarketService, TRADING_WINDOW_MIN_SECONDS, TRADING_WINDOW_MAX_SECONDS } from '../../src/services/MarketService';
+import { BtcPriceMonitor, BtcMarketState } from '../../src/services/BtcPriceMonitor';
+import { KalshiClient } from '../../src/api/KalshiClient';
 
-function makeGameState(overrides: Partial<NbaGameState> = {}): NbaGameState {
+function makeClient(markets: object[]): jest.Mocked<Pick<KalshiClient, 'getMarkets'>> {
+  return { getMarkets: jest.fn().mockResolvedValue({ markets, cursor: '' }) } as never;
+}
+
+function makeMonitor(state: BtcMarketState | null = null): jest.Mocked<Pick<BtcPriceMonitor, 'getBtcState'>> {
+  return { getBtcState: jest.fn().mockResolvedValue(state) } as never;
+}
+
+function makeRawMarket(ticker: string, secondsFromNow: number): object {
   return {
-    gameId: 'g1',
-    homeTeam: 'Lakers',
-    awayTeam: 'Celtics',
-    homeScore: 105,
-    awayScore: 88,
-    period: 4,
-    gameClock: 'PT02M30.00S',
-    gameStatus: 2,
-    isQ4OrLater: true,
-    homeTeamTricode: 'LAL',
-    awayTeamTricode: 'BOS',
-    homeTimeoutsRemaining: 2,
-    awayTimeoutsRemaining: 1,
-    ...overrides,
+    ticker,
+    event_ticker:        'KXBTC15M',
+    title:               `BTC 15-min ${ticker}`,
+    status:              'active',
+    yes_bid_dollars:     '0.92',
+    yes_ask_dollars:     '0.94',
+    no_bid_dollars:      '0.06',
+    no_ask_dollars:      '0.08',
+    last_price_dollars:  '0.93',
+    volume_fp:           '100',
+    close_time:          new Date(Date.now() + secondsFromNow * 1000).toISOString(),
+    can_close_early:     false,
+    rules_primary:       '',
+    rules_secondary:     '',
   };
 }
 
-function mockClient(markets: Partial<KalshiMarket>[] = []): any {
-  return {
-    getMarkets: jest.fn().mockResolvedValue({ markets, cursor: '' }),
-    getMarket: jest.fn().mockResolvedValue({ market: markets[0] ?? makeRawMarket() }),
-  };
-}
-
-function mockGameMonitor(state: NbaGameState | null = makeGameState()): any {
-  return {
-    getGameState: jest.fn().mockResolvedValue(state),
-    getLiveGames: jest.fn().mockResolvedValue(state ? [state] : []),
-  };
-}
-
-function makeRawMarket(overrides: Partial<KalshiMarket> = {}): KalshiMarket {
-  return {
-    ticker: 'KXNBAGAME-26APR05LALCLE-LAL',
-    event_ticker: 'KXNBAGAME-26APR05LALCLE',
-    title: 'Los Angeles L Winner?',
-    status: 'active',
-    yes_bid_dollars: '0.92',
-    yes_ask_dollars: '0.94',
-    no_bid_dollars: '0.06',
-    no_ask_dollars: '0.08',
-    last_price_dollars: '0.93',
-    volume_fp: '500',
-    close_time: new Date(Date.now() + 7200000).toISOString(),
-    latest_expiration_time: new Date(Date.now() + 7200000).toISOString(),
-    can_close_early: true,
-    rules_primary: 'Will the Los Angeles L win the game?',
-    rules_secondary: '',
-    ...overrides,
-  };
-}
+const BTC_STATE: BtcMarketState = {
+  currentPrice:        80400,
+  windowOpenPrice:     80000,
+  priceChangeFraction: 0.005,
+  windowStartTime:     new Date(Date.now() - 600_000),
+  windowCloseTime:     new Date(Date.now() + 300_000),
+  lastUpdated:         new Date(),
+};
 
 describe('MarketService', () => {
-  // Mock today's date code to match our test ticker (26APR05)
-  const originalDate = global.Date;
-
-  beforeEach(() => {
-    const fixedDate = new Date('2026-04-05T20:00:00Z');
-    jest.spyOn(global, 'Date').mockImplementation((arg?: any) => {
-      if (arg === undefined) return fixedDate as any;
-      return new originalDate(arg) as any;
+  describe('trading window classification', () => {
+    it('marks market as in window when secondsLeft is between min and max', async () => {
+      const svc = new MarketService(makeClient([makeRawMarket('T1', 120)]) as never, makeMonitor(BTC_STATE) as never);
+      const [m] = await svc.getAllLiveBtcMarkets();
+      expect(m.isInTradingWindow).toBe(true);
+      expect(m.secondsLeft).toBeGreaterThanOrEqual(TRADING_WINDOW_MIN_SECONDS);
+      expect(m.secondsLeft).toBeLessThanOrEqual(TRADING_WINDOW_MAX_SECONDS);
     });
-    (global.Date as any).now = () => fixedDate.getTime();
-    (global.Date as any).UTC = originalDate.UTC;
-  });
 
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  it('returns markets for live Q4 games today', async () => {
-    const client = mockClient([makeRawMarket()]);
-    const monitor = mockGameMonitor(makeGameState());
-    const service = new MarketService(client, monitor);
-    const markets = await service.getLiveBasketballMarkets();
-    expect(markets.length).toBe(1);
-    expect(markets[0].ticker).toBe('KXNBAGAME-26APR05LALCLE-LAL');
-  });
-
-  it('excludes markets where game is not in Q4', async () => {
-    const client = mockClient([makeRawMarket()]);
-    const monitor = mockGameMonitor(makeGameState({ period: 2, isQ4OrLater: false }));
-    const service = new MarketService(client, monitor);
-    const markets = await service.getLiveBasketballMarkets();
-    expect(markets).toHaveLength(0);
-  });
-
-  it('excludes markets where game state is unknown', async () => {
-    const client = mockClient([makeRawMarket()]);
-    const monitor = mockGameMonitor(null);
-    const service = new MarketService(client, monitor);
-    const markets = await service.getLiveBasketballMarkets();
-    expect(markets).toHaveLength(0);
-  });
-
-  it('parses dollar-string prices correctly', async () => {
-    const client = mockClient([makeRawMarket({ yes_bid_dollars: '0.90', yes_ask_dollars: '0.94' })]);
-    const monitor = mockGameMonitor();
-    const service = new MarketService(client, monitor);
-    const markets = await service.getLiveBasketballMarkets();
-    expect(markets[0].yesBid).toBeCloseTo(0.90);
-    expect(markets[0].yesAsk).toBeCloseTo(0.94);
-  });
-
-  it('blends model and market mid when game state available', async () => {
-    // LAL +17 with 2:30 left → model ≈ 1.0, market mid ≈ 0.93
-    // blended = 0.7 × ~1.0 + 0.3 × ~0.93 ≈ 0.979 — above market mid, below pure model
-    const client = mockClient([makeRawMarket()]);
-    const monitor = mockGameMonitor(makeGameState({ homeScore: 105, awayScore: 88, gameClock: 'PT02M30.00S' }));
-    const service = new MarketService(client, monitor);
-    const markets = await service.getLiveBasketballMarkets();
-    expect(markets[0].winProbability).toBeGreaterThan(0.93); // above market mid
-    expect(markets[0].winProbability).toBeLessThan(1.0);     // below pure model
-  });
-
-  it('falls back to market mid when no game state', async () => {
-    // No game state → market excluded from Q4 scan, but getMarket still parses prices
-    // Test via a mock that returns game state = null but market still parsed
-    const client = mockClient([makeRawMarket({ yes_bid_dollars: '0.90', yes_ask_dollars: '0.94' })]);
-    // When getMarket is called directly (no Q4 filter), mid price is used
-    const monitor = mockGameMonitor(makeGameState({ homeScore: 95, awayScore: 90, gameClock: 'PT02M30.00S' }));
-    const service = new MarketService(client, monitor);
-    const markets = await service.getLiveBasketballMarkets();
-    // Model gives some probability > 0 for +5 lead with 2:30 left
-    expect(markets[0].winProbability).toBeGreaterThan(0.5);
-    expect(markets[0].winProbability).toBeLessThan(1.0);
-  });
-
-  it('includes markets from any date as long as game is in Q4', async () => {
-    // Date filter removed — a game that started yesterday but is still live in Q4 must be included
-    const prevDayMarket = makeRawMarket({
-      ticker: 'KXNBAGAME-26APR05INDCLE-CLE',
-      event_ticker: 'KXNBAGAME-26APR05INDCLE',
+    it('marks market outside window when secondsLeft > max', async () => {
+      const svc = new MarketService(makeClient([makeRawMarket('T2', TRADING_WINDOW_MAX_SECONDS + 60)]) as never, makeMonitor(BTC_STATE) as never);
+      const [m] = await svc.getAllLiveBtcMarkets();
+      expect(m.isInTradingWindow).toBe(false);
     });
-    const client = mockClient([prevDayMarket]);
-    const monitor = mockGameMonitor();
-    const service = new MarketService(client, monitor);
-    const markets = await service.getLiveBasketballMarkets();
-    expect(markets).toHaveLength(1);
+
+    it('marks market outside window when secondsLeft < min', async () => {
+      const svc = new MarketService(makeClient([makeRawMarket('T3', TRADING_WINDOW_MIN_SECONDS - 10)]) as never, makeMonitor(BTC_STATE) as never);
+      const [m] = await svc.getAllLiveBtcMarkets();
+      expect(m.isInTradingWindow).toBe(false);
+    });
+  });
+
+  describe('win probability', () => {
+    it('computes blended probability when BTC state is available', async () => {
+      const svc = new MarketService(makeClient([makeRawMarket('T4', 120)]) as never, makeMonitor(BTC_STATE) as never);
+      const [m] = await svc.getAllLiveBtcMarkets();
+      // BTC up 0.5% at 120s left → high model prob → blended prob should be > 0.9
+      expect(m.winProbability).toBeGreaterThan(0.9);
+    });
+
+    it('falls back to market mid when BTC state unavailable', async () => {
+      const svc = new MarketService(makeClient([makeRawMarket('T5', 120)]) as never, makeMonitor(null) as never);
+      const [m] = await svc.getAllLiveBtcMarkets();
+      // Mid of 0.92 + 0.94 = 0.93
+      expect(m.winProbability).toBeCloseTo(0.93, 2);
+    });
+  });
+
+  describe('cache management', () => {
+    it('caches markets and returns them via getCachedMarkets', async () => {
+      const svc = new MarketService(makeClient([makeRawMarket('T6', 120)]) as never, makeMonitor(BTC_STATE) as never);
+      await svc.getAllLiveBtcMarkets();
+      expect(svc.getCachedMarkets()).toHaveLength(1);
+    });
+
+    it('getCachedTradingWindowMarkets filters to in-window markets only', async () => {
+      const svc = new MarketService(makeClient([
+        makeRawMarket('IN',  150),
+        makeRawMarket('OUT', TRADING_WINDOW_MAX_SECONDS + 60),
+      ]) as never, makeMonitor(BTC_STATE) as never);
+      await svc.getAllLiveBtcMarkets();
+      const wm = svc.getCachedTradingWindowMarkets();
+      expect(wm).toHaveLength(1);
+      expect(wm[0].ticker).toBe('IN');
+    });
+
+    it('discoverMarkets removes tickers that disappear', async () => {
+      const client = makeClient([makeRawMarket('A', 120)]);
+      const svc    = new MarketService(client as never, makeMonitor(BTC_STATE) as never);
+      await svc.getAllLiveBtcMarkets();
+
+      (client.getMarkets as jest.Mock).mockResolvedValue({ markets: [], cursor: '' });
+      const { removedTickers } = await svc.discoverMarkets();
+      expect(removedTickers).toContain('A');
+    });
+
+    it('discoverMarkets reports new tickers', async () => {
+      const client = makeClient([]);
+      const svc    = new MarketService(client as never, makeMonitor(BTC_STATE) as never);
+      await svc.getAllLiveBtcMarkets();
+
+      (client.getMarkets as jest.Mock).mockResolvedValue({ markets: [makeRawMarket('NEW', 120)], cursor: '' });
+      const { newTickers } = await svc.discoverMarkets();
+      expect(newTickers).toContain('NEW');
+    });
+  });
+
+  describe('applyTickerUpdate', () => {
+    it('updates bid/ask from WS ticker message', async () => {
+      const svc = new MarketService(makeClient([makeRawMarket('WS', 120)]) as never, makeMonitor(BTC_STATE) as never);
+      await svc.getAllLiveBtcMarkets();
+
+      const updated = svc.applyTickerUpdate({
+        type: 'ticker', market_ticker: 'WS', yes_bid_dollars: '0.96', yes_ask_dollars: '0.97',
+      } as never);
+      expect(updated).not.toBeNull();
+      expect(updated!.yesBid).toBeCloseTo(0.96);
+      expect(updated!.yesAsk).toBeCloseTo(0.97);
+    });
+
+    it('returns null for unknown ticker', () => {
+      const svc = new MarketService(makeClient([]) as never, makeMonitor() as never);
+      expect(svc.applyTickerUpdate({ type: 'ticker', market_ticker: 'UNKNOWN' } as never)).toBeNull();
+    });
   });
 });
