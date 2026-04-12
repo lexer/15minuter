@@ -99,9 +99,6 @@ export class TradingAgent {
     const market = this.markets.applyTickerUpdate(msg);
     if (!market) return;
 
-    const openTrade = this.history.getOpenTrades().find((t) => t.ticker === market.ticker);
-    if (!openTrade && !market.isInTradingWindow) return;
-
     // Log one analysis entry per WS tick — gives backtest-accurate bid/ask resolution.
     // startTick/logBrtiState must precede handleMarket so logMarketEval can annotate the snapshot.
     const brtiPrice = this.markets.getLatestBrtiState()?.currentPrice;

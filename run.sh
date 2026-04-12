@@ -5,6 +5,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# ── Build ─────────────────────────────────────────────────────────────────────
+echo "[run.sh] Building TypeScript..."
+npm run build
+
 # ── Stop old instance ─────────────────────────────────────────────────────────
 if [ -f btc_agent.pid ]; then
   OLD_PID=$(cat btc_agent.pid)

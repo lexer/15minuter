@@ -23,6 +23,7 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 9. The private Kalshi API key is stored in `private_key.pem` — **never commit this file to the repository**.  
 10. The API key must be stored in a `.env` file under the name `KALSHI_API_KEY`.  
 11. **Run all unit tests (`npm test`) before every commit. Do not commit if any test fails.**
+11a. **After every commit that changes agent logic, restart the agent:** `kill $(cat btc_agent.pid) && sleep 2 && bash run.sh`
 12. When unit testing the API client, make real API requests and verify external server responses.  
 13. Do not commit temporary or unnecessary files.  
 14. Maintain a `changelog.md` file to track all major changes.
