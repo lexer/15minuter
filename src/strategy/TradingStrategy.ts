@@ -82,7 +82,11 @@ export class TradingStrategy {
     };
   }
 
-  evaluateExit(market: BtcMarket, heldContracts: number): TradeSignal {
+  /**
+   * @param suppressSoftExit - When true (liquidation cascade active), soft-zone
+   *   confirmation exits are suspended. Hard stops and emergency exits still fire.
+   */
+  evaluateExit(market: BtcMarket, heldContracts: number, suppressSoftExit = false): TradeSignal {
     // Emergency exit: single-tick bid crash (≥15¢ drop) overrides probability guard
     const prevBid = this.previousBids.get(market.ticker);
     this.previousBids.set(market.ticker, market.yesBid);
@@ -112,6 +116,17 @@ export class TradingStrategy {
     }
 
     if (market.yesBid <= EXIT_PROBABILITY_THRESHOLD) {
+      // During a liquidation cascade: suspend soft-zone confirmation to avoid panic sells.
+      // Hard stop (above) and emergency exit (above) still fire as safety nets.
+      if (suppressSoftExit) {
+        this.lowBidCounts.delete(market.ticker);
+        return {
+          action: 'hold',
+          reason: `Bid ${(market.yesBid * 100).toFixed(0)}¢ soft zone — suspended during liquidation cascade`,
+          market,
+        };
+      }
+
       // Probability guard: suppress exit if model still shows high confidence
       if (market.winProbability >= EXIT_PROBABILITY_GUARD) {
         this.lowBidCounts.delete(market.ticker);

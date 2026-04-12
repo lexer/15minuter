@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { BtcMarket } from '../services/MarketService';
-import { BtcMarketState } from '../services/BtcPriceMonitor';
 import { TradeSignal } from '../strategy/TradingStrategy';
 import { TradeRecord } from './TradeHistory';
 
@@ -10,22 +9,23 @@ function r4(n: number): number {
 }
 
 export interface MarketSnapshot {
-  ticker: string;
-  winProbability: number;
-  ask: number;
-  bid: number;
-  secondsLeft: number;
+  ticker:          string;
+  threshold:       number;       // T-value from ticker (market settlement reference)
+  priceChangePct:  number;       // (currentBrti - threshold) / threshold * 100
+  settlementCount: number;       // BRTI samples collected in settlement window
+  winProbability:  number;
+  ask:             number;
+  bid:             number;
+  secondsLeft:     number;
   // Present only for markets evaluated for entry
-  signal?: 'buy' | 'sell' | 'hold';
-  signalReason?: string;
-  contracts?: number;
-  limitPrice?: number;
+  signal?:         'buy' | 'sell' | 'hold';
+  signalReason?:   string;
+  contracts?:      number;
+  limitPrice?:     number;
 }
 
 export interface BtcWindowAnalysis {
-  currentPrice: number;
-  windowOpenPrice: number;
-  priceChangePct: number;  // percentage, rounded to 4dp
+  currentPrice: number;  // live BRTI value
   markets: MarketSnapshot[];
 }
 
@@ -81,14 +81,15 @@ export class AnalysisLogger {
     };
   }
 
-  logBtcState(btcState: BtcMarketState | undefined, markets: BtcMarket[]): void {
-    if (!btcState) return;
+  logBrtiState(brtiPrice: number | undefined, markets: BtcMarket[]): void {
+    if (brtiPrice === undefined) return;
     this.pendingTick.btc = {
-      currentPrice:    btcState.currentPrice,
-      windowOpenPrice: btcState.windowOpenPrice,
-      priceChangePct:  r4(btcState.priceChangeFraction * 100),
+      currentPrice: brtiPrice,
       markets: markets.map((m) => ({
         ticker:          m.ticker,
+        threshold:       m.threshold,
+        priceChangePct:  m.threshold > 0 ? r4((brtiPrice - m.threshold) / m.threshold * 100) : 0,
+        settlementCount: m.settlementSamples.length,
         winProbability:  r4(m.winProbability),
         ask:             m.yesAsk,
         bid:             m.yesBid,

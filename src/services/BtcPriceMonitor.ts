@@ -1,74 +1,202 @@
-// Polls Binance for BTC/USDT 15-minute candle data to track window open price.
+/**
+ * Connects to the CF Benchmarks BRTI WebSocket feed for real-time BTC price.
+ *
+ * BRTI (Bitcoin Real-Time Index) is the official settlement price source for
+ * Kalshi KXBTC15M markets. It is calculated every second from multiple
+ * constituent exchanges (Coinbase, Bitstamp, Kraken, etc.).
+ *
+ * WebSocket: wss://www.cfbenchmarks.com/ws/v4
+ * Subscribe:  { type: 'subscribe', id: 'BRTI', stream: 'value' }
+ * Response:   { type: 'value', id: 'BRTI', value: '71580.41', time: <epoch_ms> }
+ *
+ * Credentials are scraped from the CF Benchmarks BRTI page and refreshed
+ * every 15 minutes since they are embedded in the Next.js page build.
+ */
 
-const BINANCE_KLINE_URL =
-  'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=15m&limit=1';
-const BINANCE_PRICE_URL =
-  'https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT';
+import WebSocket from 'ws';
+import { BtcMomentumIndicators, MomentumState } from './BtcMomentumIndicators';
 
-export interface BtcMarketState {
-  currentPrice: number;        // latest BTC/USDT spot price
-  windowOpenPrice: number;     // BTC price at start of current 15-min candle
-  priceChangeFraction: number; // (currentPrice - windowOpenPrice) / windowOpenPrice
-  windowStartTime: Date;       // when the current 15-min candle opened
-  windowCloseTime: Date;       // when the current 15-min candle closes
-  lastUpdated: Date;
+const BRTI_WS_URL         = 'wss://www.cfbenchmarks.com/ws/v4';
+const BRTI_PAGE_DATA_URL  = 'https://www.cfbenchmarks.com/_next/data/{BUILD_ID}/data/indices/BRTI.json';
+const BRTI_PAGE_URL       = 'https://www.cfbenchmarks.com/data/indices/BRTI';
+
+const MAX_RECONNECT_DELAY_MS    = 30_000;
+const CREDENTIAL_REFRESH_MS     = 15 * 60 * 1_000; // 15 minutes
+
+export interface BrtiState {
+  currentPrice: number;
+  lastUpdated:  Date;
+  /** Momentum indicators computed from the last 30+ ticks. Null until enough data. */
+  momentum:     MomentumState | null;
 }
 
-interface BinancePriceTicker {
-  symbol: string;
-  price: string;
+interface BrtiValueMessage {
+  type: 'value';
+  id: string;
+  value: string;
+  time: number;
+}
+
+interface BrtiCredentials {
+  wsApiKeyId:       string;
+  wsApiKeyPassword: string;
 }
 
 export class BtcPriceMonitor {
-  private cache: BtcMarketState | null = null;
-  private lastFetch = 0;
-  private readonly cacheTtlMs = 5_000;
+  private latestPrice:    number | null        = null;
+  private latestTime:     Date | null          = null;
+  private latestMomentum: MomentumState | null = null;
+  private readonly indicators = new BtcMomentumIndicators();
+  private ws:             WebSocket | null = null;
+  private reconnectTimer:   ReturnType<typeof setTimeout> | null = null;
+  private credRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectDelay = 1_000;
+  private running = false;
+  private credentials: BrtiCredentials | null = null;
 
-  async getBtcState(): Promise<BtcMarketState | null> {
-    const now = Date.now();
-    if (this.cache && now - this.lastFetch < this.cacheTtlMs) {
-      return this.cache;
+  /** Fetch credentials and connect to the BRTI WebSocket. */
+  async start(): Promise<void> {
+    this.running = true;
+    // refreshCredentials() calls reconnect() → connect() internally when creds arrive
+    await this.refreshCredentials();
+    // Refresh credentials periodically so the WS key stays valid
+    this.credRefreshTimer = setInterval(
+      () => void this.refreshCredentials(),
+      CREDENTIAL_REFRESH_MS,
+    );
+  }
+
+  /** Disconnect and cancel all timers. */
+  stop(): void {
+    this.running = false;
+    if (this.reconnectTimer)   { clearTimeout(this.reconnectTimer);   this.reconnectTimer   = null; }
+    if (this.credRefreshTimer) { clearInterval(this.credRefreshTimer); this.credRefreshTimer = null; }
+    if (this.ws) {
+      this.ws.removeAllListeners();
+      this.ws.close();
+      this.ws = null;
     }
+  }
 
-    try {
-      const [klineResp, priceResp] = await Promise.all([
-        fetch(BINANCE_KLINE_URL),
-        fetch(BINANCE_PRICE_URL),
-      ]);
-
-      if (!klineResp.ok || !priceResp.ok) {
-        console.warn(
-          `[BtcPriceMonitor] Binance error: kline=${klineResp.status} price=${priceResp.status}`,
-        );
-        return this.cache;
-      }
-
-      const klines = (await klineResp.json()) as Array<Array<string | number>>;
-      const priceTicker = (await priceResp.json()) as BinancePriceTicker;
-
-      if (!klines.length) {
-        console.warn('[BtcPriceMonitor] Empty klines response');
-        return this.cache;
-      }
-
-      const kline = klines[0];
-      const windowOpenPrice = parseFloat(kline[1] as string);
-      const currentPrice = parseFloat(priceTicker.price);
-      const priceChangeFraction = (currentPrice - windowOpenPrice) / windowOpenPrice;
-
-      this.cache = {
-        currentPrice,
-        windowOpenPrice,
-        priceChangeFraction,
-        windowStartTime: new Date(kline[0] as number),
-        windowCloseTime: new Date((kline[6] as number) + 1), // +1ms: candle closeTime is inclusive
-        lastUpdated: new Date(),
+  /**
+   * Returns the latest BRTI price received from the WebSocket.
+   * Returns null if no price has been received yet — callers should not trade
+   * until a valid BRTI price is available.
+   */
+  async getBtcState(): Promise<BrtiState | null> {
+    if (this.latestPrice !== null && this.latestTime !== null) {
+      return {
+        currentPrice: this.latestPrice,
+        lastUpdated:  this.latestTime,
+        momentum:     this.latestMomentum,
       };
-      this.lastFetch = now;
+    }
+    return null;
+  }
+
+  // ── Private ───────────────────────────────────────────────────────────────────
+
+  /**
+   * Scrapes ws credentials from the CF Benchmarks BRTI Next.js page.
+   * The page embeds wsApiKeyId + wsApiKeyPassword in its server-side props.
+   */
+  private async refreshCredentials(): Promise<void> {
+    try {
+      // Step 1: get the current Next.js buildId from the HTML page
+      const htmlResp = await fetch(BRTI_PAGE_URL, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+      if (!htmlResp.ok) throw new Error(`Page fetch ${htmlResp.status}`);
+      const html    = await htmlResp.text();
+      const buildId = /"buildId":"([^"]+)"/.exec(html)?.[1];
+      if (!buildId) throw new Error('buildId not found in page');
+
+      // Step 2: fetch page props JSON which contains the WS credentials
+      const dataUrl  = BRTI_PAGE_DATA_URL.replace('{BUILD_ID}', buildId);
+      const dataResp = await fetch(dataUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (!dataResp.ok) throw new Error(`Data fetch ${dataResp.status}`);
+      const data = await dataResp.json() as {
+        pageProps: { wsApiKeyId: string; wsApiKeyPassword: string };
+      };
+
+      const { wsApiKeyId, wsApiKeyPassword } = data.pageProps;
+      if (!wsApiKeyId || !wsApiKeyPassword) throw new Error('Credentials missing from page props');
+
+      const changed = !this.credentials ||
+        this.credentials.wsApiKeyId !== wsApiKeyId ||
+        this.credentials.wsApiKeyPassword !== wsApiKeyPassword;
+
+      this.credentials = { wsApiKeyId, wsApiKeyPassword };
+
+      if (changed) {
+        console.log('[BrtiMonitor] Credentials refreshed — reconnecting');
+        this.reconnect();
+      }
     } catch (err) {
-      console.warn('[BtcPriceMonitor] Failed to fetch BTC data:', err);
+      console.warn('[BrtiMonitor] Failed to refresh credentials:', (err as Error).message);
+    }
+  }
+
+  private reconnect(): void {
+    if (this.ws) {
+      this.ws.removeAllListeners();
+      this.ws.close();
+      this.ws = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    // Reset momentum state so stale EMA/RSI values don't carry over into the new connection
+    this.indicators.reset();
+    this.latestMomentum = null;
+    if (this.running) this.connect();
+  }
+
+  private connect(): void {
+    if (!this.credentials) {
+      console.warn('[BrtiMonitor] No credentials available — cannot connect');
+      return;
     }
 
-    return this.cache;
+    const { wsApiKeyId, wsApiKeyPassword } = this.credentials;
+    const creds = Buffer.from(`${wsApiKeyId}:${wsApiKeyPassword}`).toString('base64');
+    const ws = new WebSocket(BRTI_WS_URL, {
+      headers: { Authorization: `Basic ${creds}` },
+    });
+    this.ws = ws;
+
+    ws.on('open', () => {
+      this.reconnectDelay = 1_000;
+      ws.send(JSON.stringify({ type: 'subscribe', id: 'BRTI', stream: 'value' }));
+      console.log('[BrtiMonitor] Connected — subscribed to BRTI value stream');
+    });
+
+    ws.on('message', (data: Buffer) => {
+      try {
+        const msg = JSON.parse(data.toString()) as BrtiValueMessage;
+        if (msg.type === 'value' && msg.id === 'BRTI' && msg.value) {
+          const price          = parseFloat(msg.value);
+          this.latestPrice     = price;
+          this.latestTime      = new Date(msg.time);
+          this.latestMomentum  = this.indicators.update(price);
+        }
+      } catch { /* ignore malformed frames */ }
+    });
+
+    ws.on('close', () => {
+      if (!this.running) return;
+      const delay = this.reconnectDelay;
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
+      console.warn(`[BrtiMonitor] Disconnected — reconnecting in ${delay}ms`);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this.connect();
+      }, delay);
+    });
+
+    ws.on('error', (err: Error) => {
+      console.warn('[BrtiMonitor] WS error:', err.message);
+    });
   }
 }

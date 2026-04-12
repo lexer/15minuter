@@ -27,6 +27,8 @@ function makeMarket(overrides: Partial<BtcMarket> = {}): BtcMarket {
     winProbability:     0.93,
     isInTradingWindow:  true,
     secondsLeft:        120,
+    threshold:          80000,
+    settlementSamples:  [],
     ...overrides,
   };
 }
@@ -153,6 +155,29 @@ describe('TradingStrategy', () => {
 
     it('holds when bid is above exit threshold', () => {
       expect(strategy.evaluateExit(makeMarket({ yesBid: 0.88 }), 5).action).toBe('hold');
+    });
+
+    it('suppresses soft-zone exit during liquidation cascade', () => {
+      const market = makeMarket({ yesBid: 0.75, winProbability: 0.65 });
+      // Baseline: without suppressSoftExit, sells after EXIT_CONFIRMATION_TICKS ticks
+      for (let i = 1; i < EXIT_CONFIRMATION_TICKS; i++) {
+        expect(strategy.evaluateExit(market, 5, false).action).toBe('hold');
+      }
+      expect(strategy.evaluateExit(market, 5, false).action).toBe('sell');
+
+      // With suppressSoftExit=true: stays in hold indefinitely in soft zone
+      strategy = new TradingStrategy();
+      for (let i = 0; i < EXIT_CONFIRMATION_TICKS + 2; i++) {
+        const result = strategy.evaluateExit(market, 5, true);
+        expect(result.action).toBe('hold');
+        expect(result.reason).toMatch(/cascade/);
+      }
+    });
+
+    it('still hard-stops during liquidation cascade (suppressSoftExit does not block hard stop)', () => {
+      const market = makeMarket({ yesBid: EXIT_HARD_STOP, winProbability: 0.95 });
+      expect(strategy.evaluateExit(market, 5, true).action).toBe('sell');
+      expect(strategy.evaluateExit(market, 5, true).reason).toMatch(/Hard stop/);
     });
 
     it('triggers emergency exit on single-tick bid crash ≥15¢', () => {

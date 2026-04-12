@@ -72,4 +72,56 @@ describe('BtcProbabilityModel', () => {
       expect(model.calculate(0.001,  300)).toBeLessThan(0.90);    // 0.1% change → ~66%, not tradeable
     });
   });
+
+  describe('calculateSettlement: final 60-second BRTI average model', () => {
+    const T = 80000; // threshold
+
+    it('returns high probability when BTC is above threshold at start of settlement window', () => {
+      // No samples yet, 60s left, BTC +0.5% above threshold
+      const prob = model.calculateSettlement(80400, T, [], 0, 60);
+      expect(prob).toBeGreaterThan(0.99);
+    });
+
+    it('returns ~0.5 when price equals threshold', () => {
+      expect(model.calculateSettlement(T, T, [], 0, 60)).toBeCloseTo(0.5, 2);
+    });
+
+    it('returns low probability when BTC is below threshold', () => {
+      const prob = model.calculateSettlement(79600, T, [], 0, 60);
+      expect(prob).toBeLessThan(0.01);
+    });
+
+    it('returns 1.0 when time is up and accumulated average is above threshold', () => {
+      // All 60 samples collected, average above threshold
+      const samples = Array(60).fill(80200);
+      const prob = model.calculateSettlement(80200, T, samples, 60, 0);
+      expect(prob).toBe(1.0);
+    });
+
+    it('returns 0.0 when time is up and accumulated average is below threshold', () => {
+      const samples = Array(60).fill(79800);
+      const prob = model.calculateSettlement(79800, T, samples, 60, 0);
+      expect(prob).toBe(0.0);
+    });
+
+    it('is more confident than pre-settlement model at the same lead', () => {
+      const priceChangeFraction = (80400 - T) / T; // +0.5%
+      const stdProb        = model.calculate(priceChangeFraction, 60);  // standard at 60s
+      const settlementProb = model.calculateSettlement(80400, T, [], 0, 60); // settlement at entry
+      // Settlement average smooths noise → higher confidence for same price lead
+      expect(settlementProb).toBeGreaterThanOrEqual(stdProb);
+    });
+
+    it('grows more confident as samples accumulate', () => {
+      // 5s left, price above threshold: with vs without prior samples
+      const noSamples   = model.calculateSettlement(80300, T, [],                    55, 5);
+      const withSamples = model.calculateSettlement(80300, T, Array(11).fill(80300), 55, 5);
+      // More accumulated evidence → equal or more confident
+      expect(withSamples).toBeGreaterThanOrEqual(noSamples);
+    });
+
+    it('returns 0.5 for zero threshold', () => {
+      expect(model.calculateSettlement(80000, 0, [], 0, 30)).toBeCloseTo(0.5);
+    });
+  });
 });

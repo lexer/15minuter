@@ -1,95 +1,145 @@
+import { EventEmitter } from 'events';
 import { BtcPriceMonitor } from '../../src/services/BtcPriceMonitor';
 
-// Mock the global fetch used by BtcPriceMonitor
+// ── fetch mock (credential scraping) ─────────────────────────────────────────
+
 const mockFetch = jest.fn();
 global.fetch = mockFetch;
 
-function makeKlineResponse(open: number, closeTime: number): string {
-  const openTime = closeTime - 15 * 60 * 1000;
-  return JSON.stringify([[openTime, open.toString(), '0', '0', '0', '0', closeTime, '0', '0', '0', '0', '0']]);
+function makeHtmlResponse(buildId = 'test-build-id'): Response {
+  return {
+    ok:   true,
+    text: async () => `<html><script id="__NEXT_DATA__">{"buildId":"${buildId}"}</script></html>`,
+  } as unknown as Response;
 }
 
-function makePriceResponse(price: number): string {
-  return JSON.stringify({ symbol: 'BTCUSDT', price: price.toString() });
+function makePageDataResponse(keyId = 'testKey', keyPass = 'testPass'): Response {
+  return {
+    ok:   true,
+    json: async () => ({ pageProps: { wsApiKeyId: keyId, wsApiKeyPassword: keyPass } }),
+  } as unknown as Response;
 }
+
+function setupFetchMocks(buildId = 'test-build', keyId = 'testKey', keyPass = 'testPass'): void {
+  mockFetch
+    .mockResolvedValueOnce(makeHtmlResponse(buildId))
+    .mockResolvedValueOnce(makePageDataResponse(keyId, keyPass));
+}
+
+// ── WebSocket mock ────────────────────────────────────────────────────────────
+
+class MockWs extends EventEmitter {
+  static instance: MockWs | null = null;
+  sent: string[] = [];
+
+  constructor() {
+    super();
+    MockWs.instance = this;
+  }
+
+  send(data: string): void { this.sent.push(data); }
+  close(): void { this.emit('close'); }
+  removeAllListeners(): this { super.removeAllListeners(); return this; }
+}
+
+jest.mock('ws', () => ({
+  __esModule: true,
+  default: jest.fn().mockImplementation(() => new MockWs()),
+}));
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function emitBrtiPrice(price: number, timeMs = Date.now()): void {
+  MockWs.instance?.emit(
+    'message',
+    Buffer.from(JSON.stringify({ type: 'value', id: 'BRTI', value: String(price), time: timeMs })),
+  );
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('BtcPriceMonitor', () => {
   let monitor: BtcPriceMonitor;
 
   beforeEach(() => {
-    monitor = new BtcPriceMonitor();
+    MockWs.instance = null;
     mockFetch.mockReset();
-    jest.useFakeTimers();
+    monitor = new BtcPriceMonitor();
   });
 
   afterEach(() => {
-    jest.useRealTimers();
+    monitor.stop();
   });
 
-  it('returns null when fetch fails', async () => {
-    mockFetch.mockRejectedValue(new Error('network error'));
+  it('returns null before first price is received', async () => {
+    setupFetchMocks();
+    await monitor.start();
     const state = await monitor.getBtcState();
     expect(state).toBeNull();
   });
 
-  it('returns null when kline response is not ok', async () => {
-    mockFetch
-      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true,  status: 200, json: async () => ({ symbol: 'BTCUSDT', price: '80000' }) });
-    const state = await monitor.getBtcState();
-    expect(state).toBeNull();
-  });
-
-  it('parses BTC state correctly', async () => {
-    const closeTime = Date.now() + 300_000;
-    mockFetch
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makeKlineResponse(80000, closeTime)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makePriceResponse(80400)) });
-
+  it('returns BRTI price after receiving a value message', async () => {
+    setupFetchMocks();
+    await monitor.start();
+    emitBrtiPrice(71500);
     const state = await monitor.getBtcState();
     expect(state).not.toBeNull();
-    expect(state!.windowOpenPrice).toBeCloseTo(80000);
-    expect(state!.currentPrice).toBeCloseTo(80400);
-    expect(state!.priceChangeFraction).toBeCloseTo(0.005, 5); // 0.5% up
+    expect(state!.currentPrice).toBeCloseTo(71500);
   });
 
-  it('returns cached state within TTL without re-fetching', async () => {
-    const closeTime = Date.now() + 300_000;
-    mockFetch
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makeKlineResponse(80000, closeTime)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makePriceResponse(80100)) });
-
-    await monitor.getBtcState();
-    await monitor.getBtcState(); // second call within TTL
-
-    expect(mockFetch).toHaveBeenCalledTimes(2); // only one set of requests
+  it('sends subscribe message on connect', async () => {
+    setupFetchMocks();
+    await monitor.start();
+    MockWs.instance?.emit('open');
+    expect(MockWs.instance?.sent).toContainEqual(
+      JSON.stringify({ type: 'subscribe', id: 'BRTI', stream: 'value' }),
+    );
   });
 
-  it('re-fetches after TTL expires', async () => {
-    const closeTime = Date.now() + 300_000;
-    mockFetch
-      .mockResolvedValue({ ok: true, status: 200, json: async () => JSON.parse(makeKlineResponse(80000, closeTime)) });
-    // Override second call for price
-    mockFetch
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makeKlineResponse(80000, closeTime)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makePriceResponse(80100)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makeKlineResponse(80000, closeTime)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makePriceResponse(80200)) });
-
-    await monitor.getBtcState();
-    jest.advanceTimersByTime(6_000); // past 5s TTL
-    await monitor.getBtcState();
-
-    expect(mockFetch).toHaveBeenCalledTimes(4); // two full fetches
-  });
-
-  it('computes negative priceChangeFraction when BTC is down', async () => {
-    const closeTime = Date.now() + 300_000;
-    mockFetch
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makeKlineResponse(80000, closeTime)) })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => JSON.parse(makePriceResponse(79600)) });
-
+  it('updates price on subsequent messages', async () => {
+    setupFetchMocks();
+    await monitor.start();
+    emitBrtiPrice(71000);
+    emitBrtiPrice(71500);
     const state = await monitor.getBtcState();
-    expect(state!.priceChangeFraction).toBeCloseTo(-0.005, 5); // -0.5%
+    expect(state!.currentPrice).toBeCloseTo(71500);
+  });
+
+  it('ignores messages for other ids', async () => {
+    setupFetchMocks();
+    await monitor.start();
+    MockWs.instance?.emit(
+      'message',
+      Buffer.from(JSON.stringify({ type: 'value', id: 'ETHUSD', value: '3000', time: Date.now() })),
+    );
+    const state = await monitor.getBtcState();
+    expect(state).toBeNull();
+  });
+
+  it('ignores malformed messages without throwing', async () => {
+    setupFetchMocks();
+    await monitor.start();
+    MockWs.instance?.emit('message', Buffer.from('not-json'));
+    const state = await monitor.getBtcState();
+    expect(state).toBeNull();
+  });
+
+  it('does not connect if credential fetch fails', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('network error'));
+    const WebSocket = require('ws').default as jest.Mock;
+    WebSocket.mockClear();
+    await monitor.start();
+    expect(WebSocket).not.toHaveBeenCalled();
+  });
+
+  it('stop() prevents reconnection', async () => {
+    setupFetchMocks();
+    const WebSocket = require('ws').default as jest.Mock;
+    WebSocket.mockClear();
+    await monitor.start();
+    monitor.stop();
+    MockWs.instance?.emit('close');
+    // Should not create a new WebSocket after stop
+    expect(WebSocket).toHaveBeenCalledTimes(1);
   });
 });

@@ -65,7 +65,7 @@ describe('KalshiWebSocket', () => {
       ws.send(JSON.stringify({
         type: 'ticker',
         msg: {
-          market_ticker:   'NBA-TEST',
+          market_ticker:   'KXBTC15M-TEST',
           yes_bid_dollars: 0.91,
           yes_ask_dollars: 0.93,
           price_dollars:   0.92,
@@ -78,7 +78,7 @@ describe('KalshiWebSocket', () => {
     await client.connect();
     await waitFor(() => received !== null);
 
-    expect(received!.market_ticker).toBe('NBA-TEST');
+    expect(received!.market_ticker).toBe('KXBTC15M-TEST');
     expect(received!.yes_bid_dollars).toBe(0.91);
   });
 
@@ -93,7 +93,7 @@ describe('KalshiWebSocket', () => {
         msg: {
           trade_id:          'trade-1',
           order_id:          'order-1',
-          market_ticker:     'NBA-TEST',
+          market_ticker:     'KXBTC15M-TEST',
           side:              'yes',
           action:            'buy',
           yes_price_dollars: '0.92',
@@ -122,7 +122,7 @@ describe('KalshiWebSocket', () => {
         type: 'market_position',
         msg: {
           user_id:                   'user-1',
-          market_ticker:             'NBA-TEST',
+          market_ticker:             'KXBTC15M-TEST',
           position_fp:               '5',
           position_cost_dollars:     '4.60',
           realized_pnl_dollars:      '0.00',
@@ -135,7 +135,7 @@ describe('KalshiWebSocket', () => {
     await client.connect();
     await waitFor(() => received !== null);
 
-    expect(received!.market_ticker).toBe('NBA-TEST');
+    expect(received!.market_ticker).toBe('KXBTC15M-TEST');
     expect(received!.position_fp).toBe('5');
   });
 
@@ -256,7 +256,7 @@ describe('KalshiWebSocket', () => {
     });
 
     client = new KalshiWebSocket('key-id', privateKey, serverUrl, WATCHDOG);
-    client.subscribeToTickers(['NBA-LAKERS', 'NBA-CELTICS']);
+    client.subscribeToTickers(['KXBTC15M-26APR11-T83499', 'KXBTC15M-26APR11-T84000']);
     await client.connect();
 
     // Wait for reconnect
@@ -274,7 +274,7 @@ describe('KalshiWebSocket', () => {
     // There should be at least one ticker subscribe from after reconnect
     expect(tickerSubscribes.length).toBeGreaterThanOrEqual(1);
     const allTickers = tickerSubscribes.flatMap((c: any) => c.params.market_tickers as string[]);
-    expect(allTickers).toContain('NBA-LAKERS');
-    expect(allTickers).toContain('NBA-CELTICS');
+    expect(allTickers).toContain('KXBTC15M-26APR11-T83499');
+    expect(allTickers).toContain('KXBTC15M-26APR11-T84000');
   });
 });

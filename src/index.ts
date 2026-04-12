@@ -94,6 +94,7 @@ import * as crypto from 'crypto';
 import { KalshiClient } from './api/KalshiClient';
 import { KalshiWebSocket } from './api/KalshiWebSocket';
 import { BtcPriceMonitor } from './services/BtcPriceMonitor';
+import { BinanceLiquidationMonitor } from './services/BinanceLiquidationMonitor';
 import { MarketService } from './services/MarketService';
 import { OrderService } from './services/OrderService';
 import { PortfolioService } from './services/PortfolioService';
@@ -111,14 +112,15 @@ function main(): void {
   const privateKeyPem  = fs.readFileSync(privateKeyPath, 'utf-8');
   const privateKey     = crypto.createPrivateKey(privateKeyPem);
 
-  const client         = new KalshiClient(keyId, privateKeyPath);
-  const ws             = new KalshiWebSocket(keyId, privateKey);
-  const btcMonitor     = new BtcPriceMonitor();
-  const marketService  = new MarketService(client, btcMonitor);
-  const orderService   = new OrderService(client);
-  const portfolioService = new PortfolioService(client);
-  const strategy       = new TradingStrategy();
-  const history        = new TradeHistory(path.resolve(process.cwd(), 'btc_trade_history.json'));
+  const client              = new KalshiClient(keyId, privateKeyPath);
+  const ws                  = new KalshiWebSocket(keyId, privateKey);
+  const btcMonitor          = new BtcPriceMonitor();
+  const liquidationMonitor  = new BinanceLiquidationMonitor();
+  const marketService       = new MarketService(client, btcMonitor);
+  const orderService        = new OrderService(client);
+  const portfolioService    = new PortfolioService(client);
+  const strategy            = new TradingStrategy();
+  const history             = new TradeHistory(path.resolve(process.cwd(), 'btc_trade_history.json'));
 
   const agent = new TradingAgent(
     ws,
@@ -127,10 +129,13 @@ function main(): void {
     portfolioService,
     strategy,
     history,
+    liquidationMonitor,
   );
 
   const shutdown = (signal: string) => {
     console.log(`\n[Main] Received ${signal} — shutting down...`);
+    btcMonitor.stop();
+    liquidationMonitor.stop();
     agent.stop();
     cleanup();
     process.exit(0);
@@ -139,11 +144,17 @@ function main(): void {
   process.on('SIGINT',  () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-  agent.start().catch((err) => {
-    console.error('[Main] Fatal error:', err);
-    cleanup();
-    process.exit(1);
-  });
+  // Start liquidation monitor (synchronous WebSocket connection — no await needed)
+  liquidationMonitor.start();
+
+  // Fetch BRTI credentials and connect WebSocket before agent begins trading
+  btcMonitor.start()
+    .then(() => agent.start())
+    .catch((err) => {
+      console.error('[Main] Fatal error:', err);
+      cleanup();
+      process.exit(1);
+    });
 }
 
 main();

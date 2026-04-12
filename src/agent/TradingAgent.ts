@@ -4,6 +4,7 @@ import { PortfolioService } from '../services/PortfolioService';
 import { TradingStrategy } from '../strategy/TradingStrategy';
 import { TradeHistory, TradeRecord } from '../storage/TradeHistory';
 import { AnalysisLogger } from '../storage/AnalysisLogger';
+import { BinanceLiquidationMonitor } from '../services/BinanceLiquidationMonitor';
 import {
   KalshiWebSocket,
   WsTickerMessage,
@@ -13,7 +14,7 @@ import {
 import * as crypto from 'crypto';
 
 // ── Intervals ─────────────────────────────────────────────────────────────────
-const BTC_STATE_INTERVAL_MS         =  5_000; // Binance price poll cadence
+const BTC_STATE_INTERVAL_MS         =  5_000; // BRTI state refresh cadence
 const MARKET_DISCOVERY_INTERVAL_MS  = 30_000; // REST: find new/closed markets
 const BALANCE_REFRESH_INTERVAL_MS   = 10_000; // REST: correct balance drift
 const RECONCILE_INTERVAL_MS         = 15_000; // REST: sanity-check positions
@@ -31,12 +32,13 @@ export class TradingAgent {
   private readonly orderTradeMap   = new Map<string, { tradeId: string; limitPrice: number; filledContracts: number }>();
 
   constructor(
-    private readonly ws:        KalshiWebSocket,
-    private readonly markets:   MarketService,
-    private readonly orders:    OrderService,
-    private readonly portfolio: PortfolioService,
-    private readonly strategy:  TradingStrategy,
-    private readonly history:   TradeHistory,
+    private readonly ws:                  KalshiWebSocket,
+    private readonly markets:             MarketService,
+    private readonly orders:              OrderService,
+    private readonly portfolio:           PortfolioService,
+    private readonly strategy:            TradingStrategy,
+    private readonly history:             TradeHistory,
+    private readonly liquidationMonitor:  BinanceLiquidationMonitor,
   ) {}
 
   // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -138,18 +140,18 @@ export class TradingAgent {
     try {
       await this.markets.refreshBtcStates();
 
-      const btcState             = this.markets.getLatestBtcState();
+      const brtiState            = this.markets.getLatestBrtiState();
       const tradingWindowMarkets = this.markets.getCachedTradingWindowMarkets();
       const openTrades           = this.history.getOpenTrades();
       const openPositionsCost    = this.openPositionsCost(openTrades);
 
-      const btcSummary = btcState
-        ? `BTC $${btcState.currentPrice.toFixed(0)} (${btcState.priceChangeFraction >= 0 ? '+' : ''}${(btcState.priceChangeFraction * 100).toFixed(3)}%)`
-        : 'BTC N/A';
-      console.log(`[Agent] ${btcSummary} | ${tradingWindowMarkets.length} market(s) in window | deployed=$${(openPositionsCost / 100).toFixed(2)}`);
+      const brtiSummary = brtiState
+        ? `BRTI $${brtiState.currentPrice.toFixed(2)}`
+        : 'BRTI N/A (waiting for feed)';
+      console.log(`[Agent] ${brtiSummary} | ${tradingWindowMarkets.length} market(s) in window | deployed=$${(openPositionsCost / 100).toFixed(2)}`);
 
       this.analysis.startTick(this.cachedBalanceCents);
-      this.analysis.logBtcState(btcState, this.markets.getCachedMarkets());
+      this.analysis.logBrtiState(brtiState?.currentPrice, this.markets.getCachedMarkets());
       const marketMap = new Map(this.markets.getCachedMarkets().map((m) => [m.ticker, m]));
       this.analysis.logOpenPositions(openTrades, marketMap);
 
@@ -172,7 +174,7 @@ export class TradingAgent {
 
       const hasOpen   = currentOpenTrades.length > 0;
       const hasWindow = tradingWindowMarkets.length > 0;
-      if (hasOpen || hasWindow || btcState) {
+      if (hasOpen || hasWindow || brtiState) {
         this.analysis.finalizeTick(this.history.getSummary(), unrealizedPnl);
       }
     } catch (err) {
@@ -244,7 +246,8 @@ export class TradingAgent {
       return;
     }
 
-    const signal = this.strategy.evaluateExit(market, record.contracts);
+    const isCascade = this.liquidationMonitor.isLiquidationCascade();
+    const signal    = this.strategy.evaluateExit(market, record.contracts, isCascade);
 
     if (signal.action === 'sell') {
       console.log(`[Agent] EXIT ${market.ticker}: ${signal.reason}`);
@@ -281,6 +284,16 @@ export class TradingAgent {
 
   private async scanEntry(market: BtcMarket): Promise<void> {
     if (this.pendingEntries.has(market.ticker)) return;
+
+    // Block new entries during liquidation cascades — spreads are wide and fills are poor
+    if (this.liquidationMonitor.isLiquidationCascade()) {
+      const liq = this.liquidationMonitor.getLiquidationState();
+      console.log(
+        `[Agent] CASCADE BLOCK entry ${market.ticker}` +
+        ` | $${(liq.recentVolumeUsd / 1_000_000).toFixed(2)}M liquidated in 10s`,
+      );
+      return;
+    }
 
     const signal = this.strategy.evaluateEntry(market, this.cachedBalanceCents);
     this.analysis.logMarketEval(market, signal);

@@ -8,8 +8,8 @@ let tempFile: string;
 function makeRecord(id: string): TradeRecord {
   return {
     id,
-    ticker: 'NBA-LAKERS-2024',
-    marketTitle: 'Lakers will win',
+    ticker: 'KXBTC15M-26APR11-T83499',
+    marketTitle: 'BTC 15m market',
     side: 'yes',
     action: 'buy',
     contracts: 5,
