@@ -12,9 +12,10 @@ export interface MarketSnapshot {
   ticker:             string;
   targetPrice:        number;       // floor_strike from API: 60s BRTI average at interval open
   priceChangePct:     number;       // (sixtySecondsAvg - targetPrice) / targetPrice * 100 in settlement window; spot-based otherwise
-  /** Projected 60-second closing average. Present only in the final 60s (settlement window).
-   *  = (mean(samples) × elapsed + currentBrti × secondsLeft) / 60 */
-  sixtySecondsAvg?:   number;
+  /** Projected 60-second closing average (the actual resolution determinant).
+   *  Settlement window: (mean(samples) × elapsed + currentBrti × secondsLeft) / 60
+   *  Before settlement: currentBrti (flat projection). */
+  sixtySecondsAvg:    number;
   winProbability:     number;
   ask:                number;
   bid:                number;
@@ -93,25 +94,29 @@ export class AnalysisLogger {
           ticker:          m.ticker,
           targetPrice:     m.threshold,
           priceChangePct:  m.threshold > 0 ? r4((brtiPrice - m.threshold) / m.threshold * 100) : 0,
+          sixtySecondsAvg: r4(brtiPrice),
           winProbability:  r4(m.winProbability),
           ask:             m.yesAsk,
           bid:             m.yesBid,
           secondsLeft,
         };
 
-        // In the settlement window, compute the projected 60-second closing average:
-        //   (mean(samples) × elapsedSeconds + currentBrti × secondsLeft) / 60
-        if (secondsLeft <= 60 && secondsLeft > 0) {
-          const elapsed    = Math.max(0, 60 - secondsLeft);
-          const partialSum = m.settlementSamples.length > 0
-            ? (m.settlementSamples.reduce((a, b) => a + b, 0) / m.settlementSamples.length) * elapsed
-            : 0;
-          snapshot.sixtySecondsAvg = r4((partialSum + secondsLeft * brtiPrice) / 60);
-          // priceChangePct should compare the projected closing average against targetPrice,
-          // not spot vs targetPrice — that's what actually determines resolution
-          if (m.threshold > 0 && snapshot.sixtySecondsAvg !== undefined) {
-            snapshot.priceChangePct = r4((snapshot.sixtySecondsAvg - m.threshold) / m.threshold * 100);
+        // Projected 60-second closing average (the actual resolution determinant).
+        // Settlement window (final 60s): weighted average of accumulated 1s BRTI samples
+        //   and current BRTI for the remaining seconds.
+        // Before settlement window: current BRTI (flat projection — if BRTI stays constant).
+        // priceChangePct always uses this vs targetPrice.
+        if (m.threshold > 0) {
+          if (secondsLeft <= 60 && secondsLeft > 0) {
+            const elapsed    = Math.max(0, 60 - secondsLeft);
+            const partialSum = m.settlementSamples.length > 0
+              ? (m.settlementSamples.reduce((a, b) => a + b, 0) / m.settlementSamples.length) * elapsed
+              : 0;
+            snapshot.sixtySecondsAvg = r4((partialSum + secondsLeft * brtiPrice) / 60);
+          } else {
+            snapshot.sixtySecondsAvg = r4(brtiPrice);
           }
+          snapshot.priceChangePct = r4((snapshot.sixtySecondsAvg - m.threshold) / m.threshold * 100);
         }
 
         return snapshot;
