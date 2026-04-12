@@ -10,7 +10,7 @@ function r4(n: number): number {
 
 export interface MarketSnapshot {
   ticker:          string;
-  threshold:       number;       // T-value from ticker (market settlement reference)
+  threshold:       number;       // floor_strike from API (BTC target price for YES resolution)
   priceChangePct:  number;       // (currentBrti - threshold) / threshold * 100
   settlementCount: number;       // BRTI samples collected in settlement window
   winProbability:  number;

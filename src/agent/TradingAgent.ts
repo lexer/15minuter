@@ -312,9 +312,10 @@ export class TradingAgent {
       return;
     }
 
+    const targetStr = market.threshold > 0 ? ` | target=$${market.threshold.toFixed(2)}` : '';
     console.log(
       `[Agent] ENTRY ${market.ticker} | prob=${(market.winProbability * 100).toFixed(1)}%` +
-      ` | ${signal.suggestedContracts} contracts @ $${signal.suggestedLimitPrice?.toFixed(2)}`,
+      `${targetStr} | ${signal.suggestedContracts} contracts @ $${signal.suggestedLimitPrice?.toFixed(2)}`,
     );
 
     this.pendingEntries.add(market.ticker);
