@@ -36,6 +36,12 @@ export class TradingAgent {
   private readonly pendingTopUps   = new Set<string>();
   /** Prevent concurrent exit orders for the same ticker (onTicker + btcStateLoop race). */
   private readonly pendingExits    = new Set<string>();
+  /**
+   * Tickers where we have already attempted an exit this session.
+   * Blocks both re-entry and top-up after any exit attempt.
+   * Cleared when the market is removed from discovery (expired/closed).
+   */
+  private readonly recentlyExited  = new Set<string>();
 
   constructor(
     private readonly ws:                  KalshiWebSocket,
@@ -187,6 +193,7 @@ export class TradingAgent {
       if (newTickers.length || removedTickers.length) {
         console.log(`[Agent] Market discovery: +${newTickers.length} new, -${removedTickers.length} removed`);
         this.ws.updateTickerSubscriptions(newTickers, removedTickers);
+        for (const ticker of removedTickers) this.recentlyExited.delete(ticker);
       }
     } catch (err) {
       console.error('[Agent] marketDiscoveryLoop error:', err);
@@ -277,8 +284,8 @@ export class TradingAgent {
       console.log(`[Agent] HOLD ${market.ticker} @ prob=${(market.winProbability * 100).toFixed(1)}%`);
       this.analysis.logDecision({ type: 'hold', ticker: market.ticker, reason: signal.reason });
 
-      // Top-up if position is below window budget limit
-      if (!this.pendingTopUps.has(market.ticker)) {
+      // Top-up if position is below window budget limit (skip if we've already exited this market)
+      if (!this.pendingTopUps.has(market.ticker) && !this.recentlyExited.has(market.ticker)) {
         const topUp = this.strategy.evaluateTopUp(market, record.contracts, this.cachedBalanceCents, record.side);
         if (topUp.contracts > 0) {
           const topUpPrice = record.side === 'no' ? market.noAsk : market.yesAsk;
@@ -303,6 +310,7 @@ export class TradingAgent {
 
   private async scanEntry(market: BtcMarket): Promise<void> {
     if (this.pendingEntries.has(market.ticker)) return;
+    if (this.recentlyExited.has(market.ticker)) return;
 
     // Block new entries during liquidation cascades — spreads are wide and fills are poor
     if (this.liquidationMonitor.isLiquidationCascade()) {
@@ -435,9 +443,16 @@ export class TradingAgent {
         console.log(`[Agent] Sell ${order.orderId} unfilled — position remains`);
         return { orderId: order.orderId, filledCount: 0 };
       }
+      // Mark this ticker as exited — blocks re-entry and top-up for the rest of this session
+      this.recentlyExited.add(record.ticker);
+
       if (order.filledCount < record.contracts) {
         console.log(`[Agent] Partial sell: ${order.filledCount}/${record.contracts} on ${record.ticker}`);
-        this.history.updateTrade(record.id, { contracts: record.contracts - order.filledCount });
+        const removedCost = order.filledCount * record.pricePerContract;
+        this.history.updateTrade(record.id, {
+          contracts: record.contracts - order.filledCount,
+          totalCost: record.totalCost - removedCost,
+        });
       }
       const pnl = this.strategy.calculatePnl(record.pricePerContract, limitPrice, order.filledCount);
       if (order.filledCount === record.contracts) {
