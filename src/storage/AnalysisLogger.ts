@@ -109,6 +109,11 @@ export class AnalysisLogger {
             ? (m.settlementSamples.reduce((a, b) => a + b, 0) / m.settlementSamples.length) * elapsed
             : 0;
           snapshot.sixtySecondsAvg = r4((partialSum + secondsLeft * brtiPrice) / 60);
+          // priceChangePct should compare the projected closing average against targetPrice,
+          // not spot vs targetPrice — that's what actually determines resolution
+          if (m.threshold > 0 && snapshot.sixtySecondsAvg !== undefined) {
+            snapshot.priceChangePct = r4((snapshot.sixtySecondsAvg - m.threshold) / m.threshold * 100);
+          }
         }
 
         return snapshot;
