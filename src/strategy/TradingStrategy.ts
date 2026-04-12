@@ -4,10 +4,11 @@ import { WinProbabilityModel } from '../services/WinProbabilityModel';
 export const ENTRY_PROBABILITY_THRESHOLD = 0.9;
 export const ENTRY_CONFIRMATION_THRESHOLD = 0.9;    // ask must exceed this to enter
 export const ENTRY_MAX_SECONDS = 600;               // only enter in final 10 minutes of game
-export const EXIT_PROBABILITY_THRESHOLD = 0.7;
-export const EXIT_PROBABILITY_GUARD = 0.85; // don't exit on bid dip if model prob is above this
-export const EXIT_CONFIRMATION_TICKS = 3;   // consecutive ticks below bid threshold required to exit
-export const EXIT_EMERGENCY_DROP = 0.15;    // single-tick bid crash threshold — exit immediately bypassing prob guard
+export const EXIT_PROBABILITY_THRESHOLD = 0.8;  // bid at or below this triggers soft exit (guard + confirmation)
+export const EXIT_HARD_STOP = 0.7;              // bid at or below this triggers immediate exit — no guard, no confirmation
+export const EXIT_PROBABILITY_GUARD = 0.85;     // don't soft-exit if model prob is above this
+export const EXIT_CONFIRMATION_TICKS = 3;       // consecutive ticks below soft threshold required to exit
+export const EXIT_EMERGENCY_DROP = 0.15;        // single-tick bid crash threshold — exit immediately bypassing prob guard
 
 // Risk 25% of starting daily budget on a single trade
 const MAX_BALANCE_RISK_FRACTION = 0.25;
@@ -155,6 +156,19 @@ export class TradingStrategy {
       return {
         action: 'sell',
         reason: `Emergency exit: bid crashed ${(prevBid * 100).toFixed(0)}¢→${(market.yesBid * 100).toFixed(0)}¢ (${((prevBid - market.yesBid) * 100).toFixed(0)}¢ drop in one tick)`,
+        market,
+        suggestedContracts: heldContracts,
+        suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,
+      };
+    }
+
+    // Hard stop: bid at or below floor — exit immediately, no guard, no confirmation window
+    if (market.yesBid <= EXIT_HARD_STOP) {
+      this.lowBidCounts.delete(market.ticker);
+      this.previousBids.delete(market.ticker);
+      return {
+        action: 'sell',
+        reason: `Hard stop: bid ${(market.yesBid * 100).toFixed(0)}¢ ≤ ${EXIT_HARD_STOP * 100}¢ — exiting immediately`,
         market,
         suggestedContracts: heldContracts,
         suggestedLimitPrice: market.yesBid > 0 ? market.yesBid : 0,

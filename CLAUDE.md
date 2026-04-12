@@ -37,7 +37,13 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 1. Trade exclusively on **professional basketball game winners**. Do not trade on any other markets or game aspects.
 2. Only place trades during the **fourth quarter of live games** (final 10 minutes only — ≤ 600 seconds remaining).
 3. **Entry**: YES ask **> 90¢** — buy at ask price immediately on the first qualifying tick (IOC order). No confirmation window; a momentary spike with no liquidity simply results in an unfilled order.
-4. **Exit**: YES bid drops to 80¢ or below AND blended win probability < 85% for **3 consecutive ticks**. If probability ≥ 85%, hold regardless of bid (probability guard). Sell immediately if market becomes inactive.
+4. **Exit** (evaluated in priority order on each tick):
+   - Market inactive/closed → sell immediately at bid.
+   - Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit).
+   - **bid ≤ 70¢ → hard stop: sell immediately, no probability guard, no confirmation window.** Caps max loss at ~20¢/contract.
+   - 70¢ < bid ≤ 80¢ AND blended win probability ≥ 85% → hold (probability guard blocks exit).
+   - 70¢ < bid ≤ 80¢ AND blended win probability < 85% → require **3 consecutive ticks**, then sell at bid.
+   - bid > 80¢ → hold.
 5. **Win probability**: `0.7 × Gaussian model + 0.3 × Kalshi market mid`. Gaussian model uses score differential, seconds remaining, and timeout advantage (trailing team's extra timeouts add 14s each in final 2 minutes).
 6. Strategy is **event-driven via WebSocket**: single connection to `wss://api.elections.kalshi.com/trade-api/ws/v2`. Entry/exit evaluated on every WS ticker update for Q4 markets. WS fill channel corrects trade record prices to actual execution price. WS market_positions channel marks positions closed in real-time. NBA game data polled every 5s; market discovery every 30s; balance corrected every 10s; full reconciliation every 15s.
 7. Track the full history of trades and analyze completed games to improve the strategy over time.

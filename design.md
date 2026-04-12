@@ -69,10 +69,17 @@ The 70/30 blend was calibrated via backtest on 2026-04-06 game data: it exits lo
 No confirmation window: IOC order semantics make it redundant — a momentary ask spike with no real liquidity simply results in an unfilled order, not a bad fill. Removing the window eliminates 2s of latency and the need for a price-drift guard.
 
 ### 6. Exit Criteria
+
+Checks are evaluated in priority order on every tick:
+
 1. Market inactive/closed → sell immediately at bid
-2. bid ≤ 80¢ AND blended winProbability ≥ 85% → hold (probability guard blocks exit)
-3. bid ≤ 80¢ AND blended winProbability < 85% → require **3 consecutive ticks**, then sell at bid
-4. bid > 80¢ → hold
+2. Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit, overrides probability guard)
+3. **bid ≤ 70¢ → hard stop: sell immediately, no probability guard, no confirmation window**
+4. 70¢ < bid ≤ 80¢ AND blended winProbability ≥ 85% → hold (probability guard blocks soft exit)
+5. 70¢ < bid ≤ 80¢ AND blended winProbability < 85% → require **3 consecutive ticks**, then sell at bid
+6. bid > 80¢ → hold
+
+The hard stop caps the worst-case loss on a single trade at ~20¢/contract (entry >90¢, hard stop at 70¢). The probability guard only applies in the 70–80¢ soft zone, preventing premature exits while the model still shows high confidence.
 
 ### 7. Position Sizing
 Size is `min(25% × startingDailyBudget, availableCash)`. The budget is fixed at the cash balance recorded at agent startup each day and does not change as positions are opened or settled. This prevents the compounding over-leverage that occurred on 2026-04-10 when using `cash + open positions` as the base, which allowed 6 concurrent positions to push total exposure to 3.4× the starting balance.
