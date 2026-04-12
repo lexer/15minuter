@@ -96,18 +96,21 @@ export class TradingAgent {
   }
 
   private async onFill(msg: WsFillMessage): Promise<void> {
-    const price = parseFloat(msg.yes_price_dollars);
-    const count = parseFloat(msg.count_fp);
-    const delta = Math.round(price * count * 100);
+    // WS fill messages only carry yes_price_dollars.
+    // For NO fills the actual NO cost is 1 − yes_price_dollars.
+    const yesPrice   = parseFloat(msg.yes_price_dollars);
+    const actualPrice = msg.side === 'no' ? 1 - yesPrice : yesPrice;
+    const count      = parseFloat(msg.count_fp);
+    const delta      = Math.round(actualPrice * count * 100);
     this.cachedBalanceCents += msg.action === 'buy' ? -delta : delta;
     console.log(
-      `[Agent] FILL ${msg.market_ticker} ${msg.action} ${msg.count_fp} @ $${msg.yes_price_dollars}` +
-      ` | balance≈$${(this.cachedBalanceCents / 100).toFixed(2)}`,
+      `[Agent] FILL ${msg.market_ticker} ${msg.side} ${msg.action} ${msg.count_fp}` +
+      ` @ $${actualPrice.toFixed(3)} | balance≈$${(this.cachedBalanceCents / 100).toFixed(2)}`,
     );
 
     if (msg.action === 'buy') {
       const acc = this.fillAccumulator.get(msg.order_id) ?? { totalCost: 0, filledContracts: 0 };
-      acc.totalCost       += price * count;
+      acc.totalCost       += actualPrice * count;
       acc.filledContracts += count;
       this.fillAccumulator.set(msg.order_id, acc);
       this.applyFillPrice(msg.order_id);
@@ -504,8 +507,15 @@ export class TradingAgent {
       const kalshiTickers = new Set(portfolio.positions.filter((p) => p.contracts > 0).map((p) => p.ticker));
       for (const trade of openTrades) {
         if (!kalshiTickers.has(trade.ticker) && marketMap.has(trade.ticker)) {
-          console.log(`[Agent] EXTERNAL CLOSE detected: ${trade.ticker} — marking closed`);
-          this.history.updateTrade(trade.id, { exitTime: new Date().toISOString(), exitReason: 'manual', pnl: 0 });
+          const market = marketMap.get(trade.ticker)!;
+          if (market.result) {
+            // Market settled — compute proper PnL via recordSettlement
+            console.log(`[Agent] SETTLEMENT detected via reconcile: ${trade.ticker} result=${market.result}`);
+            this.recordSettlement(trade, market);
+          } else {
+            console.log(`[Agent] EXTERNAL CLOSE detected: ${trade.ticker} — marking closed`);
+            this.history.updateTrade(trade.id, { exitTime: new Date().toISOString(), exitReason: 'manual', pnl: 0 });
+          }
         }
       }
 
@@ -557,7 +567,8 @@ export class TradingAgent {
     return openTrades.reduce((sum, trade) => {
       const market = marketMap.get(trade.ticker);
       if (!market) return sum;
-      return sum + (market.yesBid - trade.pricePerContract) * trade.contracts;
+      const currentBid = trade.side === 'no' ? market.noBid : market.yesBid;
+      return sum + (currentBid - trade.pricePerContract) * trade.contracts;
     }, 0);
   }
 
