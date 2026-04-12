@@ -73,25 +73,25 @@ This agent uses dedicated file names to avoid conflicts with other agents runnin
 
 ## Health Check Process
 
-A recurring health check runs every **30 minutes** via Claude Code cron. At the start of each Claude session, verify the cron is active with `CronList` and recreate it if missing with `CronCreate`.
+A recurring health check runs every **60 minutes** via Claude Code cron. At the start of each Claude session, verify the cron is active with `CronList` and recreate it if missing with `CronCreate`.
 
 **Health check prompt** (model: `claude-haiku-4-5-20251001`):
 ```
 Health check for the BTC 15-min trading agent. Use model claude-haiku-4-5-20251001 for this quick check.
 
-1. Read /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log and check for any errors newer than 30 minutes ago (current time is now).
+1. Read /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log and check for any errors newer than 60 minutes ago (current time is now).
 2. Read the last 30 lines of the current agent log at /Users/aleksei.zakharov/robinhood/15minuter/btc_agent_<TODAY>.log.
 3. Check if the agent process is still running: read /Users/aleksei.zakharov/robinhood/15minuter/btc_agent.pid and verify the PID is alive with `ps -p <PID>`.
 4. Report a brief health summary: agent running (yes/no), any new errors (count), last log activity.
 
-If new errors were found in btc_errors.log in the past 30 minutes, spawn a deeper analysis using model claude-opus-4-6 via the Agent tool with this prompt: "Analyze the errors in /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log - focus on errors from the last 30 minutes. Read the agent log for context. Identify root causes and recommend fixes. Be concise."
+If new errors were found in btc_errors.log in the past 60 minutes, spawn a deeper analysis using model claude-opus-4-6 via the Agent tool with this prompt: "Analyze the errors in /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log - focus on errors from the last 60 minutes. Read the agent log for context. Identify root causes and recommend fixes. Be concise."
 
 If the agent process is NOT running, restart it: run `bash /Users/aleksei.zakharov/robinhood/15minuter/run.sh` via Bash tool.
 
-After all errors are addressed (none in the last 30 minutes), clear btc_errors.log with: truncate -s 0 /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log
+After all errors are addressed (none in the last 60 minutes), clear btc_errors.log with: truncate -s 0 /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log
 ```
 
 **CronCreate parameters:**
-- Schedule: `*/30 * * * *`
+- Schedule: `7 * * * *`
 - Model: `claude-haiku-4-5-20251001`
 - Prompt: (the health check prompt above)

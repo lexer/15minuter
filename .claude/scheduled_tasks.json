@@ -1,11 +1,10 @@
 {
   "tasks": [
     {
-      "id": "4217f198",
-      "cron": "*/30 * * * *",
-      "prompt": "Health check for the bballer trading agent. Use model claude-haiku-4-5-20251001 for this quick check.\n\n1. Read /Users/aleksei.zakharov/robinhood/bballer/errors.log and check for any errors newer than 30 minutes ago (current time is now).\n2. Read the last 30 lines of the current agent log at /Users/aleksei.zakharov/robinhood/bballer/agent_<TODAY>.log.\n3. Check if the agent process is still running: read /Users/aleksei.zakharov/robinhood/bballer/agent.pid and verify the PID is alive with `ps -p <PID>`.\n4. Report a brief health summary: agent running (yes/no), any new errors (count), last log activity.\n\nIf new errors were found in errors.log in the past 30 minutes, spawn a deeper analysis using model claude-opus-4-6 via the Agent tool with this prompt: \"Analyze the errors in /Users/aleksei.zakharov/robinhood/bballer/errors.log - focus on errors from the last 30 minutes. Read the agent log for context. Identify root causes and recommend fixes. Be concise.\"\n\nIf the agent process is NOT running, restart it: run `bash /Users/aleksei.zakharov/robinhood/bballer/run.sh` via Bash tool.\n\nAfter all errors are addressed (none in the last 30 minutes), clear errors.log with: truncate -s 0 /Users/aleksei.zakharov/robinhood/bballer/errors.log",
-      "createdAt": 1775859482092,
-      "lastFiredAt": 1775964832938,
+      "id": "79524558",
+      "cron": "7 * * * *",
+      "prompt": "Health check for the BTC 15-min trading agent. Use model claude-haiku-4-5-20251001 for this quick check.\n\n1. Read /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log and check for any errors newer than 60 minutes ago (current time is now).\n2. Read the last 30 lines of the current agent log at /Users/aleksei.zakharov/robinhood/15minuter/btc_agent_<TODAY>.log.\n3. Check if the agent process is still running: read /Users/aleksei.zakharov/robinhood/15minuter/btc_agent.pid and verify the PID is alive with `ps -p <PID>`.\n4. Report a brief health summary: agent running (yes/no), any new errors (count), last log activity.\n\nIf new errors were found in btc_errors.log in the past 60 minutes, spawn a deeper analysis using model claude-opus-4-6 via the Agent tool with this prompt: \"Analyze the errors in /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log - focus on errors from the last 60 minutes. Read the agent log for context. Identify root causes and recommend fixes. Be concise.\"\n\nIf the agent process is NOT running, restart it: run `bash /Users/aleksei.zakharov/robinhood/15minuter/run.sh` via Bash tool.\n\nAfter all errors are addressed (none in the last 60 minutes), clear btc_errors.log with: truncate -s 0 /Users/aleksei.zakharov/robinhood/15minuter/btc_errors.log",
+      "createdAt": 1775978008029,
       "recurring": true
     }
   ]
