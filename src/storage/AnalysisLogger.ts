@@ -10,8 +10,8 @@ function r4(n: number): number {
 
 export interface MarketSnapshot {
   ticker:          string;
-  threshold:       number;       // floor_strike from API (BTC target price for YES resolution)
-  priceChangePct:  number;       // (currentBrti - threshold) / threshold * 100
+  targetPrice:     number;       // floor_strike from API: 60s BRTI average at interval open
+  priceChangePct:  number;       // (currentBrti - targetPrice) / targetPrice * 100
   settlementCount: number;       // BRTI samples collected in settlement window
   winProbability:  number;
   ask:             number;
@@ -87,7 +87,7 @@ export class AnalysisLogger {
       currentPrice: brtiPrice,
       markets: markets.map((m) => ({
         ticker:          m.ticker,
-        threshold:       m.threshold,
+        targetPrice:     m.threshold,
         priceChangePct:  m.threshold > 0 ? r4((brtiPrice - m.threshold) / m.threshold * 100) : 0,
         settlementCount: m.settlementSamples.length,
         winProbability:  r4(m.winProbability),
