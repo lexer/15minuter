@@ -74,30 +74,30 @@ z = (expectedAvg − floor_strike) / (floor_strike × σ_avg)
 ```
 Confidence sharpens as more samples accumulate.
 
-### 5. Blended Win Probability
+### 5. Blended Win Probability (analysis only)
 ```
 winProbability = 0.3 × marketMid + 0.7 × btcGaussianModel
 ```
-Market mid captures order-book information (institutional participants, funding rate effects) that the pure price-change model misses.
+Computed every tick and written to the analysis log. **Not used for trading decisions** — entry and exit are gated solely on market ask/bid price levels. The model was removed from the decision path because momentum and market-mid blending produced inflated estimates (e.g. 91.9% from a +0.016% price lead), causing premature entries and blocking valid exits.
 
 ### 6. Trading Window — Entry and Market Discovery
-Only trade in the final **5–60 seconds** of each 15-minute window (the settlement window):
-- The settlement window is the final 60 seconds where BRTI averaging begins. Entering at its start gives maximum information about the outcome.
+Only trade in the final **5–90 seconds** of each 15-minute window:
+- The 90-second ceiling starts 30 seconds before the 60-second BRTI averaging window begins, capturing early directional price information.
 - The 5-second floor ensures an IOC order has time to execute before market close.
 
-`isInTradingWindow = secondsLeft ∈ [5, 60]` is computed from `market.closeTime - Date.now()`.
+`isInTradingWindow = secondsLeft ∈ [5, 90]` is computed from `market.closeTime - Date.now()`.
 
 ### 7. Entry Criteria
-Entry is evaluated symmetrically for YES and NO sides.
+Entry is evaluated symmetrically for YES and NO sides. Market ask price is the **sole gate** — model probability is logged but does not influence entry.
 
 **YES entry** (bullish):
 1. Market must be `active` or `open`; `isInTradingWindow = true`
-2. YES ask **> 90¢** (win probability is high)
+2. YES ask **> 90¢ and < 100¢** (market-implied probability ≥ 90%)
 3. Size: `min($10 window budget, available cash) / yesAsk` contracts
 
 **NO entry** (bearish):
 1. Market must be `active` or `open`; `isInTradingWindow = true`
-2. NO ask **> 90¢** (i.e. YES bid **< 10¢**; win probability ≤ 10%)
+2. NO ask **> 90¢ and < 100¢** (i.e. YES bid **< 10¢**; market prices NO at ≥ 90%)
 3. Size: `min($10 window budget, available cash) / noAsk` contracts
 
 No confirmation window. IOC order semantics: a momentary ask spike with no real liquidity results in an unfilled order, not a bad fill.
@@ -110,15 +110,17 @@ noBid = 1 − yesAsk   (price to sell NO; counterparty buys NO = sells YES at ye
 This ensures NO entry IOC orders use the current market price, not a stale REST-fetched value.
 
 ### 8. Exit Criteria (evaluated in priority order each tick)
-1. Single-tick bid crash ≥ 15¢ → emergency exit (overrides probability guard)
-2. **bid ≤ 70¢ → hard stop: sell immediately, no guard, no confirmation**
-3. 70¢ < bid ≤ 80¢ AND prob ≥ 85% → hold (probability guard)
-4. 70¢ < bid ≤ 80¢ AND prob < 85% → require 3 consecutive ticks, then sell
-5. bid > 80¢ → hold
+Bid price is the sole gate — model probability is logged in reason strings but does not influence exit decisions.
+
+1. Single-tick bid crash **≥ 15¢** → emergency exit (immediate sell)
+2. **bid ≤ 70¢** → hard stop: sell immediately, no confirmation
+3. **70¢ < bid ≤ 80¢** → soft zone: require **3 consecutive ticks**, then sell at bid
+   - Exception: `suppressSoftExit=true` (liquidation cascade active) suspends soft-zone confirmation; hard stop still fires
+4. **bid > 80¢** → hold
 
 Worst-case loss per contract: entry at >90¢, hard stop at 70¢ = ~20¢.
 
-Also exits open positions that fall outside the trading window (e.g., a position entered with 90s left is still managed for exit when secondsLeft < 60 or market settles).
+Also exits open positions that fall outside the trading window (e.g., a position is still managed for exit after `secondsLeft < 5` or when the market settles).
 
 ### 9. Position Sizing — Window Budget
 Budget = **$10 per 15-minute window** (constant, not derived from account balance).

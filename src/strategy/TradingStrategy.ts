@@ -4,9 +4,6 @@ import { BtcMarket } from '../services/MarketService';
 export const ENTRY_ASK_THRESHOLD  = 0.9;   // ask must exceed this to enter (YES or NO side)
 export const ENTRY_MIN_SECONDS    = 5;     // enter no closer than 5s to close (IOC buffer)
 export const ENTRY_MAX_SECONDS    = 90;    // enter up to 90s before close
-// Win probability thresholds for side selection:
-//   winProb > 1 - ENTRY_NO_WIN_THRESHOLD (= 0.9) → buy YES
-//   winProb < ENTRY_NO_WIN_THRESHOLD      (= 0.1) → buy NO
 // ── Exit thresholds ──────────────────────────────────────────────────────────
 export const EXIT_PROBABILITY_THRESHOLD = 0.8;  // bid ≤ this triggers soft-exit zone
 export const EXIT_HARD_STOP             = 0.7;  // bid ≤ this → immediate exit, no guard
@@ -103,13 +100,13 @@ export class TradingStrategy {
    * @param suppressSoftExit - When true (liquidation cascade active), soft-zone
    *   confirmation exits are suspended. Hard stops and emergency exits still fire.
    * @param side - Which side we are holding. Defaults to 'yes'.
-   *   For NO positions, uses noBid and P(NO) = 1 - winProbability.
+   *   For NO positions, uses noBid instead of yesBid.
    */
   evaluateExit(market: BtcMarket, heldContracts: number, suppressSoftExit = false, side: 'yes' | 'no' = 'yes'): TradeSignal {
     const bid     = side === 'yes' ? market.yesBid : market.noBid;
     const sideStr = side.toUpperCase();
 
-    // Emergency exit: single-tick bid crash (≥15¢ drop) overrides probability guard
+    // Emergency exit: single-tick bid crash ≥15¢ → sell immediately
     const prevBid = this.previousBids.get(market.ticker);
     this.previousBids.set(market.ticker, bid);
     if (prevBid !== undefined && prevBid - bid >= EXIT_EMERGENCY_DROP) {

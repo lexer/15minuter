@@ -35,22 +35,22 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 ## Trading Strategy
 
 1. Trade exclusively on **`KXBTC15M` Bitcoin 15-minute price-direction markets**. Exact resolution: YES if the **60-second BRTI average before close** ≥ the **60-second BRTI average before open** of the 15-minute window (`floor_strike`). Do not trade any other market type.
-2. Only trade during the **final 60 seconds** of a 15-minute window (the settlement window). Entering at the start of BRTI averaging gives the most information about the outcome. A 5-second floor ensures there is time for an IOC order to execute.
-3. **Entry** (evaluated symmetrically for both sides; IOC order, no confirmation window):
-   - **YES**: YES ask **> 90¢** → buy YES. Win probability must be high (model confirms).
-   - **NO**: NO ask **> 90¢** (i.e. YES bid < 10¢, win probability ≤ 10%) → buy NO.
+2. Only trade during the **final 5–90 seconds** of a 15-minute window. The 90-second ceiling starts 30s before the 60-second BRTI averaging window begins; the 5-second floor ensures an IOC order has time to execute.
+3. **Entry** (evaluated symmetrically for both sides; IOC order; market price is the sole gate):
+   - **YES**: YES ask **> 90¢ and < 100¢** → buy YES.
+   - **NO**: NO ask **> 90¢ and < 100¢** (i.e. YES bid **< 10¢**) → buy NO.
+   - Win probability is **logged for analysis only** — it does not block entry.
 4. **Exit** (evaluated in priority order each tick; uses YES bid for YES positions, NO bid for NO positions):
-   - Single-tick bid crash ≥ 15¢ → sell immediately (emergency exit).
-   - **bid ≤ 70¢ → hard stop: sell immediately, no probability guard, no confirmation window.** Caps max loss at ~20¢/contract.
-   - 70¢ < bid ≤ 80¢ AND P(held side) ≥ 85% → hold (probability guard blocks exit).
-   - 70¢ < bid ≤ 80¢ AND P(held side) < 85% → require **3 consecutive ticks**, then sell at bid.
-   - bid > 80¢ → hold.
-5. **Win probability**: `0.7 × Gaussian model + 0.3 × Kalshi market mid`.
-   - **Gaussian model**: `Φ(priceChangeFraction / (σ_eff × √secondsLeft) + score × 1.5)`
+   - Single-tick bid crash **≥ 15¢** → sell immediately (emergency exit).
+   - **bid ≤ 70¢** → hard stop: sell immediately, no confirmation window. Caps max loss at ~20¢/contract.
+   - **70¢ < bid ≤ 80¢** → require **3 consecutive ticks** below 80¢, then sell at bid (soft zone).
+     - Exception: during a liquidation cascade (`suppressSoftExit=true`), soft-zone confirmation is suspended; hard stop still fires.
+   - **bid > 80¢** → hold.
+5. **Win probability** (`0.7 × Gaussian model + 0.3 × Kalshi market mid`) is computed every tick and written to the analysis log. It is **not used for trading decisions**.
+   - Gaussian model: `Φ(priceChangeFraction / (σ_eff × √secondsLeft) + score × 1.5)`
    - `priceChangeFraction = (currentBRTI − floor_strike) / floor_strike`
    - **σ_eff** priority: (1) interval realized vol from BRTI log-returns since `closeTime − 15min` (needs ≥10 returns, clamped [0.5σ, 3σ]); (2) 30-tick momentum dynamic sigma; (3) static `0.0001424` (80% annual vol).
-   - **Settlement window** (final 60s): model projects the expected 60-second closing average from accumulated BRTI samples and remaining seconds. Confidence sharpens as samples accumulate.
-   - Market mid captures institutional flow not reflected in raw price change.
+   - Settlement window (final 60s): model projects the expected closing average from accumulated BRTI samples.
 6. Strategy is **event-driven via WebSocket**: single connection to `wss://api.elections.kalshi.com/trade-api/ws/v2`. BRTI ticks arrive from CF Benchmarks WS every 1s; market discovery every 30s; balance corrected every 10s; full reconciliation every 15s.
 7. Track the full history of trades to analyze performance and improve the strategy over time.
 8. **Budget: $10 per 15-minute window** (constant). Size each trade at `min($10, available cash) / ask`. Stop trading if account balance drops to zero.
