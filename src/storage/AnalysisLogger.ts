@@ -11,8 +11,7 @@ function r4(n: number): number {
 export interface MarketSnapshot {
   ticker:             string;
   targetPrice:        number;       // floor_strike from API: 60s BRTI average at interval open
-  priceChangePct:     number;       // (currentBrti - targetPrice) / targetPrice * 100
-  settlementCount:    number;       // BRTI samples collected in settlement window
+  priceChangePct:     number;       // (sixtySecondsAvg - targetPrice) / targetPrice * 100 in settlement window; spot-based otherwise
   /** Projected 60-second closing average. Present only in the final 60s (settlement window).
    *  = (mean(samples) × elapsed + currentBrti × secondsLeft) / 60 */
   sixtySecondsAvg?:   number;
@@ -94,7 +93,6 @@ export class AnalysisLogger {
           ticker:          m.ticker,
           targetPrice:     m.threshold,
           priceChangePct:  m.threshold > 0 ? r4((brtiPrice - m.threshold) / m.threshold * 100) : 0,
-          settlementCount: m.settlementSamples.length,
           winProbability:  r4(m.winProbability),
           ask:             m.yesAsk,
           bid:             m.yesBid,
