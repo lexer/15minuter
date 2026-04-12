@@ -8,3 +8,6 @@ trade_history.json
 agent.pid
 agent_*.log
 analysis_*.log
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+errors.log
