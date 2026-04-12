@@ -9,19 +9,22 @@ function r4(n: number): number {
 }
 
 export interface MarketSnapshot {
-  ticker:          string;
-  targetPrice:     number;       // floor_strike from API: 60s BRTI average at interval open
-  priceChangePct:  number;       // (currentBrti - targetPrice) / targetPrice * 100
-  settlementCount: number;       // BRTI samples collected in settlement window
-  winProbability:  number;
-  ask:             number;
-  bid:             number;
-  secondsLeft:     number;
+  ticker:             string;
+  targetPrice:        number;       // floor_strike from API: 60s BRTI average at interval open
+  priceChangePct:     number;       // (currentBrti - targetPrice) / targetPrice * 100
+  settlementCount:    number;       // BRTI samples collected in settlement window
+  /** Projected 60-second closing average. Present only in the final 60s (settlement window).
+   *  = (mean(samples) × elapsed + currentBrti × secondsLeft) / 60 */
+  sixtySecondsAvg?:   number;
+  winProbability:     number;
+  ask:                number;
+  bid:                number;
+  secondsLeft:        number;
   // Present only for markets evaluated for entry
-  signal?:         'buy' | 'sell' | 'hold';
-  signalReason?:   string;
-  contracts?:      number;
-  limitPrice?:     number;
+  signal?:            'buy' | 'sell' | 'hold';
+  signalReason?:      string;
+  contracts?:         number;
+  limitPrice?:        number;
 }
 
 export interface BtcWindowAnalysis {
@@ -85,16 +88,31 @@ export class AnalysisLogger {
     if (brtiPrice === undefined) return;
     this.pendingTick.btc = {
       currentPrice: brtiPrice,
-      markets: markets.map((m) => ({
-        ticker:          m.ticker,
-        targetPrice:     m.threshold,
-        priceChangePct:  m.threshold > 0 ? r4((brtiPrice - m.threshold) / m.threshold * 100) : 0,
-        settlementCount: m.settlementSamples.length,
-        winProbability:  r4(m.winProbability),
-        ask:             m.yesAsk,
-        bid:             m.yesBid,
-        secondsLeft:     Math.round(m.secondsLeft),
-      })),
+      markets: markets.map((m) => {
+        const secondsLeft = Math.round(m.secondsLeft);
+        const snapshot: MarketSnapshot = {
+          ticker:          m.ticker,
+          targetPrice:     m.threshold,
+          priceChangePct:  m.threshold > 0 ? r4((brtiPrice - m.threshold) / m.threshold * 100) : 0,
+          settlementCount: m.settlementSamples.length,
+          winProbability:  r4(m.winProbability),
+          ask:             m.yesAsk,
+          bid:             m.yesBid,
+          secondsLeft,
+        };
+
+        // In the settlement window, compute the projected 60-second closing average:
+        //   (mean(samples) × elapsedSeconds + currentBrti × secondsLeft) / 60
+        if (secondsLeft <= 60 && secondsLeft > 0) {
+          const elapsed    = Math.max(0, 60 - secondsLeft);
+          const partialSum = m.settlementSamples.length > 0
+            ? (m.settlementSamples.reduce((a, b) => a + b, 0) / m.settlementSamples.length) * elapsed
+            : 0;
+          snapshot.sixtySecondsAvg = r4((partialSum + secondsLeft * brtiPrice) / 60);
+        }
+
+        return snapshot;
+      }),
     };
   }
 
