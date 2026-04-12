@@ -25,6 +25,8 @@ export class TradingAgent {
   private cachedBalanceCents       = 0;
   private lastLoggedBalance        = -1;
   private readonly pendingEntries  = new Set<string>();
+  /** Tickers whose market closed before the sell order could execute — await settlement. */
+  private readonly pendingSettlement = new Set<string>();
   private readonly intervals: ReturnType<typeof setInterval>[] = [];
 
   // ── Fill price tracking ──────────────────────────────────────────────────────
@@ -235,8 +237,15 @@ export class TradingAgent {
 
   private async managePosition(market: BtcMarket, record: TradeRecord): Promise<void> {
     if (market.result) {
+      this.pendingSettlement.delete(market.ticker);
       this.strategy.clearExitConfirmation(market.ticker);
       this.recordSettlement(record, market);
+      return;
+    }
+
+    // Market closed on exchange but Kalshi WS hasn't pushed a result yet — stop retrying sells
+    if (this.pendingSettlement.has(market.ticker)) {
+      console.log(`[Agent] AWAITING SETTLEMENT (market closed) ${market.ticker}`);
       return;
     }
 
@@ -423,6 +432,12 @@ export class TradingAgent {
       console.log(`[Agent] Sold ${order.filledCount} on ${record.ticker} @ $${limitPrice.toFixed(2)} | PnL: $${pnl.toFixed(2)}`);
       return { orderId: order.orderId, filledCount: order.filledCount };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('market_closed')) {
+        console.log(`[Agent] Market closed before sell — awaiting settlement ${record.ticker}`);
+        this.pendingSettlement.add(record.ticker);
+        return undefined;
+      }
       console.error(`[Agent] Failed to sell ${record.ticker}:`, err);
     }
   }
