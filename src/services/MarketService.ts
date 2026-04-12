@@ -101,7 +101,7 @@ export class MarketService {
     const secondsLeft       = this.computeSecondsLeft(market.closeTime);
     const isInTradingWindow = this.inWindow(secondsLeft);
     const winProbability    = market.brtiState
-      ? this.blendedProbability(market.brtiState, market.threshold, market.settlementSamples, secondsLeft, yesBid, yesAsk)
+      ? this.blendedProbability(market.brtiState, market.threshold, market.settlementSamples, secondsLeft, yesBid, yesAsk, market.closeTime)
       : market.winProbability;
 
     const updated: BtcMarket = {
@@ -139,7 +139,7 @@ export class MarketService {
       }
 
       const winProbability = brtiState
-        ? this.blendedProbability(brtiState, market.threshold, settlementSamples, secondsLeft, market.yesBid, market.yesAsk)
+        ? this.blendedProbability(brtiState, market.threshold, settlementSamples, secondsLeft, market.yesBid, market.yesAsk, market.closeTime)
         : market.winProbability;
 
       this.cache.set(market.ticker, {
@@ -221,7 +221,7 @@ export class MarketService {
     const isInTradingWindow = this.inWindow(secondsLeft);
     const mid = yesBid > 0 && yesAsk > 0 ? (yesBid + yesAsk) / 2 : lastPrice;
     const winProbability = brtiState && threshold > 0
-      ? this.blendedProbability(brtiState, threshold, [], secondsLeft, yesBid, yesAsk)
+      ? this.blendedProbability(brtiState, threshold, [], secondsLeft, yesBid, yesAsk, closeTime)
       : mid;
 
     return {
@@ -253,11 +253,18 @@ export class MarketService {
     secondsLeft:       number,
     bid:               number,
     ask:               number,
+    closeTime:         Date,
   ): number {
+    // Collect BRTI prices recorded since the start of this 15-minute interval.
+    // Used to estimate realized per-second volatility specific to this window.
+    const intervalStartMs = closeTime.getTime() - 15 * 60 * 1_000;
+    const intervalPrices  = this.btcMonitor.getIntervalPrices(intervalStartMs);
+
     let modelProb: number;
 
     if (secondsLeft <= SETTLEMENT_WINDOW_SECONDS && secondsLeft > 0 && threshold > 0) {
-      // In the final 60s: use settlement average model
+      // Final 60s: model the expected 60-second closing average vs the 60-second opening
+      // average (floor_strike). As BRTI samples accumulate the estimate sharpens.
       const accumulatedSeconds = Math.max(0, SETTLEMENT_WINDOW_SECONDS - secondsLeft);
       modelProb = this.probModel.calculateSettlement(
         brtiState.currentPrice,
@@ -265,12 +272,18 @@ export class MarketService {
         settlementSamples,
         accumulatedSeconds,
         secondsLeft,
+        intervalPrices,
       );
     } else {
       const priceChangeFraction = threshold > 0
         ? (brtiState.currentPrice - threshold) / threshold
         : 0;
-      modelProb = this.probModel.calculate(priceChangeFraction, secondsLeft, brtiState.momentum);
+      modelProb = this.probModel.calculate(
+        priceChangeFraction,
+        secondsLeft,
+        intervalPrices,
+        brtiState.momentum,
+      );
     }
 
     const marketMid = bid > 0 && ask > 0 ? (bid + ask) / 2 : modelProb;

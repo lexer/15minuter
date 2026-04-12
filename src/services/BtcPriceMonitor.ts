@@ -22,6 +22,7 @@ const BRTI_PAGE_URL       = 'https://www.cfbenchmarks.com/data/indices/BRTI';
 
 const MAX_RECONNECT_DELAY_MS    = 30_000;
 const CREDENTIAL_REFRESH_MS     = 15 * 60 * 1_000; // 15 minutes
+const PRICE_HISTORY_MAX_MS      = 20 * 60 * 1_000; // keep 20 min of BRTI ticks
 
 export interface BrtiState {
   currentPrice: number;
@@ -47,6 +48,8 @@ export class BtcPriceMonitor {
   private latestTime:     Date | null          = null;
   private latestMomentum: MomentumState | null = null;
   private readonly indicators = new BtcMomentumIndicators();
+  /** Rolling buffer of timestamped BRTI prices — last 20 minutes. Cleared on WS reconnect. */
+  private readonly priceHistory: Array<{ price: number; ts: number }> = [];
   private ws:             WebSocket | null = null;
   private reconnectTimer:   ReturnType<typeof setTimeout> | null = null;
   private credRefreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -92,6 +95,19 @@ export class BtcPriceMonitor {
       };
     }
     return null;
+  }
+
+  /**
+   * Returns BRTI prices recorded at or after sinceMs (epoch ms).
+   * Used by MarketService to get per-interval price history for realized-vol estimation.
+   * Prices from before the last WS reconnect are not included (cleared on reconnect).
+   */
+  getIntervalPrices(sinceMs: number): number[] {
+    const out: number[] = [];
+    for (const entry of this.priceHistory) {
+      if (entry.ts >= sinceMs) out.push(entry.price);
+    }
+    return out;
   }
 
   // ── Private ───────────────────────────────────────────────────────────────────
@@ -147,9 +163,10 @@ export class BtcPriceMonitor {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    // Reset momentum state so stale EMA/RSI values don't carry over into the new connection
+    // Reset momentum and price history — stale data from before disconnection is unreliable
     this.indicators.reset();
     this.latestMomentum = null;
+    this.priceHistory.length = 0;
     if (this.running) this.connect();
   }
 
@@ -180,12 +197,20 @@ export class BtcPriceMonitor {
           this.latestPrice     = price;
           this.latestTime      = new Date(msg.time);
           this.latestMomentum  = this.indicators.update(price);
+          // Append to rolling history and prune entries older than 20 minutes
+          this.priceHistory.push({ price, ts: msg.time });
+          const cutoff = msg.time - PRICE_HISTORY_MAX_MS;
+          while (this.priceHistory.length > 0 && this.priceHistory[0].ts < cutoff) {
+            this.priceHistory.shift();
+          }
         }
       } catch { /* ignore malformed frames */ }
     });
 
     ws.on('close', () => {
       if (!this.running) return;
+      // Clear price history on disconnect — gaps in the feed make log-returns unreliable
+      this.priceHistory.length = 0;
       const delay = this.reconnectDelay;
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
       console.warn(`[BrtiMonitor] Disconnected — reconnecting in ${delay}ms`);

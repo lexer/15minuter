@@ -6,8 +6,11 @@ function makeClient(markets: object[]): jest.Mocked<Pick<KalshiClient, 'getMarke
   return { getMarkets: jest.fn().mockResolvedValue({ markets, cursor: '' }) } as never;
 }
 
-function makeMonitor(state: BrtiState | null = null): jest.Mocked<Pick<BtcPriceMonitor, 'getBtcState'>> {
-  return { getBtcState: jest.fn().mockResolvedValue(state) } as never;
+function makeMonitor(state: BrtiState | null = null): jest.Mocked<Pick<BtcPriceMonitor, 'getBtcState' | 'getIntervalPrices'>> {
+  return {
+    getBtcState:       jest.fn().mockResolvedValue(state),
+    getIntervalPrices: jest.fn().mockReturnValue([]),
+  } as never;
 }
 
 /** Build a raw Kalshi market with the threshold in the floor_strike field.

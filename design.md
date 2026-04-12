@@ -42,25 +42,37 @@ Kalshi requires RSA-PSS signatures. Message: `{timestamp_ms}{METHOD}{/trade-api/
 ### 2. WebSocket Watchdog
 45-second inactivity watchdog resets on every inbound frame. If Kalshi's 10s heartbeat misses ~4 beats, the socket is terminated and reconnected with fresh auth. Avoids false positives from asymmetric network latency.
 
-### 3. BTC Price Data — Binance
-`BtcPriceMonitor` polls two public Binance endpoints every 5 seconds (no API key needed):
-- `GET /api/v3/klines?symbol=BTCUSDT&interval=15m&limit=1` → current 15-min candle open price
-- `GET /api/v3/ticker/price?symbol=BTCUSDT` → latest spot price
+### 3. BTC Price Data — CF Benchmarks BRTI
+`BtcPriceMonitor` connects to the CF Benchmarks BRTI WebSocket (`wss://www.cfbenchmarks.com/ws/v4`).
+- BRTI (Bitcoin Real-Time Index) ticks every **1 second**, sourced from Coinbase, Bitstamp, Kraken, etc.
+- KXBTC15M markets resolve on the **60-second simple average** of BRTI immediately before close vs the **60-second simple average** of BRTI immediately before the window opened (`floor_strike`).
+- The monitor maintains a **rolling 20-minute price history** (cleared on disconnect) used by the probability model to compute realized interval volatility.
+- Credentials (WS key ID + password) are scraped from the CF Benchmarks BRTI page and refreshed every 15 minutes.
 
-Binance 15-min candles align with Kalshi's `KXBTC15M` windows. The candle open price is the reference: if the current price is above the open, the YES market resolves $1.
-
-### 4. BTC Probability Model — Gaussian Random Walk
+### 4. BTC Probability Model — Gaussian Random Walk with Interval Realized Vol
 ```
-priceChangeFraction = (currentPrice − windowOpenPrice) / windowOpenPrice
-σ(T) = SIGMA_PER_SQRT_SECOND × √T          (T = seconds remaining)
-z    = priceChangeFraction / σ(T)
-prob = Φ(z)                                  (standard normal CDF)
+Resolution: P(60s-avg-at-close ≥ floor_strike)   where floor_strike = 60s-avg-at-open
+priceChangeFraction = (currentBRTI − floor_strike) / floor_strike
+σ_eff = resolveSigma(intervalPrices, momentum)
+z     = priceChangeFraction / (σ_eff × √secondsLeft) + score × 1.5
+prob  = Φ(z)
 ```
 
-`SIGMA_PER_SQRT_SECOND = 0.0001424` calibrated from BTC annual volatility ≈ 80%:
-`σ_per_√second = 0.80 / √(365 × 24 × 3600) ≈ 0.0001424`
+**Sigma priority (per √second):**
+1. **Interval realized vol** — std of log-returns from BRTI prices since `closeTime − 15min`. Requires ≥10 returns. Clamped to [0.5σ, 3σ] of static. Captures the volatility regime of the *specific current window*.
+2. **Momentum dynamic sigma** — last-30-tick realized vol from `BtcMomentumIndicators`.
+3. **Static sigma** — `0.0001424` from 80% annual BTC vol.
 
-Example: BTC up 0.5% with 120s left → σ(120) ≈ 0.00156 → z ≈ 3.21 → prob ≈ 99.9%.
+Example: BTC up 0.5% vs floor_strike, 60s left, low-vol interval (σ = 0.5×static) → z ≈ 9.0 → prob ≈ 100%.
+
+**Settlement model** (final 60 seconds):
+In the final 60s, BRTI samples are accumulated. The expected closing 60-second average is projected:
+```
+expectedAvg = (partialSum + secondsLeft × currentBRTI) / 60
+σ_avg = σ_eff × secondsLeft × √(secondsLeft/3) / 60
+z = (expectedAvg − floor_strike) / (floor_strike × σ_avg)
+```
+Confidence sharpens as more samples accumulate.
 
 ### 5. Blended Win Probability
 ```
@@ -69,11 +81,11 @@ winProbability = 0.3 × marketMid + 0.7 × btcGaussianModel
 Market mid captures order-book information (institutional participants, funding rate effects) that the pure price-change model misses.
 
 ### 6. Trading Window — Entry and Market Discovery
-Only trade in the final **60–300 seconds** of each 15-minute window:
-- Below 60s: too close to expiry, spread widens and liquidity dries up
-- Above 300s: too much time left, uncertainty too high even at >90¢ ask
+Only trade in the final **5–60 seconds** of each 15-minute window (the settlement window):
+- The settlement window is the final 60 seconds where BRTI averaging begins. Entering at its start gives maximum information about the outcome.
+- The 5-second floor ensures an IOC order has time to execute before market close.
 
-`isInTradingWindow = secondsLeft ∈ [60, 300]` is computed from `market.closeTime - Date.now()`.
+`isInTradingWindow = secondsLeft ∈ [5, 60]` is computed from `market.closeTime - Date.now()`.
 
 ### 7. Entry Criteria
 1. Market must be `active` or `open`

@@ -132,6 +132,41 @@ describe('BtcPriceMonitor', () => {
     expect(WebSocket).not.toHaveBeenCalled();
   });
 
+  it('getIntervalPrices returns prices at or after sinceMs', async () => {
+    setupFetchMocks();
+    await monitor.start();
+    const now = Date.now();
+    emitBrtiPrice(71000, now - 1000);  // 1s ago
+    emitBrtiPrice(71100, now - 500);   // 0.5s ago
+    emitBrtiPrice(71200, now);         // now
+
+    // Ask for prices since 750ms ago → should get the last two
+    const prices = monitor.getIntervalPrices(now - 750);
+    expect(prices).toHaveLength(2);
+    expect(prices[0]).toBeCloseTo(71100);
+    expect(prices[1]).toBeCloseTo(71200);
+  });
+
+  it('getIntervalPrices returns empty array before any prices', async () => {
+    setupFetchMocks();
+    await monitor.start();
+    expect(monitor.getIntervalPrices(Date.now() - 1000)).toHaveLength(0);
+  });
+
+  it('getIntervalPrices clears after reconnect', async () => {
+    setupFetchMocks();
+    await monitor.start();
+    emitBrtiPrice(71000, Date.now() - 500);
+    expect(monitor.getIntervalPrices(0)).toHaveLength(1);
+
+    // Trigger reconnect by emitting close
+    setupFetchMocks('new-build', 'newKey', 'newPass');
+    MockWs.instance?.emit('close');
+    await new Promise((r) => setTimeout(r, 10)); // let reconnect fire
+
+    expect(monitor.getIntervalPrices(0)).toHaveLength(0);
+  });
+
   it('stop() prevents reconnection', async () => {
     setupFetchMocks();
     const WebSocket = require('ws').default as jest.Mock;

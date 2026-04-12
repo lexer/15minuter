@@ -1,39 +1,33 @@
 /**
  * BTC 15-minute window win-probability model using a Gaussian random walk
- * augmented by real-time momentum indicators.
+ * with realized volatility estimated from the current 15-minute interval.
  *
- * BTC annual volatility ≈ 80%. Per-second volatility (as a price fraction):
- *   σ_per_√second = 0.80 / √(365 × 24 × 3600) ≈ 0.0001424
+ * Sigma (per-√second) priority:
+ *  1. Interval realized vol  — computed from BRTI log-returns since interval start.
+ *                              Requires ≥10 log-returns; clamped to [0.5σ, 3σ] of static.
+ *  2. Momentum dynamic sigma — last-30-tick realized vol from BtcMomentumIndicators.
+ *  3. Static sigma           — 80% annual BTC vol: 0.80/√(365×24×3600) ≈ 0.0001424.
  *
  * Two calculation modes:
  *
  * 1. Pre-settlement (secondsLeft > 60):
  *    Φ(z)  where  z = priceChangeFraction / (σ_eff × √secondsLeft) + score × MOMENTUM_SCALE
  *
- *    σ_eff = momentum.dynamicSigma if available, else SIGMA_PER_SQRT_SECOND
- *    score = momentum.score ∈ [-1, 1]; MOMENTUM_SCALE = 1.5
- *
  * 2. Settlement window (secondsLeft ≤ 60):
- *    KXBTC15M resolves YES if the 60-second average of BRTI > threshold.
- *    During the final 60s we accumulate actual BRTI samples. The expected
- *    settlement average = (accumulated_partial_sum + secondsLeft × currentBrti) / 60.
- *    The variance of the average narrows as samples accumulate, making the
- *    probability estimate progressively sharper.
+ *    KXBTC15M resolves YES if the 60-second BRTI average at close ≥ floor_strike
+ *    (the 60-second BRTI average at the start of the 15-min window).
+ *    We accumulate BRTI samples and model the expected settlement average.
+ *    The probability estimate sharpens as samples accumulate.
  *
- *    σ_avg = σ_per_√s × secondsLeft × √(secondsLeft/3) / 60
- *    (derived from the variance of a random-walk average over secondsLeft steps)
+ *    σ_avg = σ_eff × secondsLeft × √(secondsLeft/3) / 60
  *    Momentum adjustment is NOT applied in settlement mode (price path is nearly fixed).
  */
 
 import { MomentumState } from './BtcMomentumIndicators';
 
-const SIGMA_PER_SQRT_SECOND = 0.0001424; // calibrated from 80% annual BTC volatility
-
-/**
- * Momentum shifts the z-score by up to ±1.5 standard deviations.
- * score=+1 (max bullish) adds 1.5σ; score=-1 (max bearish) subtracts 1.5σ.
- */
+export const SIGMA_PER_SQRT_SECOND = 0.0001424; // 80% annual vol per √second
 const MOMENTUM_SCALE = 1.5;
+const MIN_INTERVAL_LOG_RETURNS = 10; // minimum returns for interval sigma estimate
 
 export class BtcProbabilityModel {
   /**
@@ -42,11 +36,13 @@ export class BtcProbabilityModel {
    *
    * @param priceChangeFraction - (currentBrti - threshold) / threshold
    * @param secondsRemaining    - seconds until the 15-min window closes
-   * @param momentum            - optional momentum state; uses dynamic σ + score if present
+   * @param intervalPrices      - BRTI prices from interval start; used for realized sigma
+   * @param momentum            - momentum state; score shifts z-score if no interval sigma
    */
   calculate(
     priceChangeFraction: number,
     secondsRemaining:    number,
+    intervalPrices?:     number[] | null,
     momentum?:           MomentumState | null,
   ): number {
     if (secondsRemaining <= 0) {
@@ -55,7 +51,8 @@ export class BtcProbabilityModel {
       return 0.5;
     }
 
-    const sigma = (momentum?.dynamicSigma ?? SIGMA_PER_SQRT_SECOND) * Math.sqrt(secondsRemaining);
+    const sigmaPerSqrtS = this.resolveSigma(intervalPrices, momentum);
+    const sigma = sigmaPerSqrtS * Math.sqrt(secondsRemaining);
     const z = priceChangeFraction / sigma + (momentum?.score ?? 0) * MOMENTUM_SCALE;
     return this.normalCdf(z);
   }
@@ -65,10 +62,11 @@ export class BtcProbabilityModel {
    * Used when secondsLeft ≤ 60 (inside the settlement window).
    *
    * @param currentPrice       - latest BRTI price
-   * @param threshold          - market threshold (T-value from ticker)
+   * @param threshold          - floor_strike from market (opening BRTI average)
    * @param samples            - BRTI prices already collected in this settlement window
    * @param accumulatedSeconds - how many seconds of the settlement window have elapsed
    * @param secondsLeft        - seconds remaining until market close (≤ 60)
+   * @param intervalPrices     - BRTI prices from interval start; used for realized sigma
    */
   calculateSettlement(
     currentPrice:       number,
@@ -76,6 +74,7 @@ export class BtcProbabilityModel {
     samples:            number[],
     accumulatedSeconds: number,
     secondsLeft:        number,
+    intervalPrices?:    number[] | null,
   ): number {
     if (threshold <= 0) return 0.5;
 
@@ -94,13 +93,46 @@ export class BtcProbabilityModel {
     }
 
     // σ of the settlement average (as a price fraction):
-    // σ_avg = σ_per_√s × secondsLeft × √(secondsLeft/3) / 60
-    // This reflects that averaging over secondsLeft steps reduces variance by ~1/√3.
-    const sigmaAvg = SIGMA_PER_SQRT_SECOND * secondsLeft * Math.sqrt(secondsLeft / 3) / 60;
+    // σ_avg = σ_eff × secondsLeft × √(secondsLeft/3) / 60
+    const sigmaBase = this.resolveSigma(intervalPrices, null);
+    const sigmaAvg = sigmaBase * secondsLeft * Math.sqrt(secondsLeft / 3) / 60;
     if (sigmaAvg <= 0) return priceChangeFraction > 0 ? 1.0 : 0.0;
 
     const z = priceChangeFraction / sigmaAvg;
     return this.normalCdf(z);
+  }
+
+  // ── Private ───────────────────────────────────────────────────────────────────
+
+  /**
+   * Returns the best available sigma estimate (per √second):
+   *  1. Interval realized vol from prices (if ≥10 log-returns available)
+   *  2. Momentum dynamic sigma
+   *  3. Static 80%-annual sigma
+   */
+  private resolveSigma(intervalPrices: number[] | null | undefined, momentum: MomentumState | null | undefined): number {
+    const intervalSigma = intervalPrices ? this.computeSigmaFromPrices(intervalPrices) : null;
+    return intervalSigma ?? momentum?.dynamicSigma ?? SIGMA_PER_SQRT_SECOND;
+  }
+
+  /**
+   * Computes realized per-√second sigma from an array of consecutive BRTI prices.
+   * Returns null if there are fewer than MIN_INTERVAL_LOG_RETURNS log-returns.
+   * Clamped to [0.5×, 3×] the static sigma.
+   */
+  computeSigmaFromPrices(prices: number[]): number | null {
+    if (prices.length < MIN_INTERVAL_LOG_RETURNS + 1) return null;
+    const logRets: number[] = [];
+    for (let i = 1; i < prices.length; i++) {
+      if (prices[i - 1] > 0) {
+        logRets.push(Math.log(prices[i] / prices[i - 1]));
+      }
+    }
+    if (logRets.length < MIN_INTERVAL_LOG_RETURNS) return null;
+    const mean     = logRets.reduce((a, b) => a + b, 0) / logRets.length;
+    const variance = logRets.reduce((a, r) => a + (r - mean) ** 2, 0) / (logRets.length - 1);
+    const sigma    = Math.sqrt(variance);
+    return Math.max(SIGMA_PER_SQRT_SECOND * 0.5, Math.min(SIGMA_PER_SQRT_SECOND * 3, sigma));
   }
 
   /** Abramowitz & Stegun approximation of standard normal CDF (max error 7.5e-8) */

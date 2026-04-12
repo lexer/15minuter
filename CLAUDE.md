@@ -26,7 +26,7 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 12. When unit testing the API client, make real API requests and verify external server responses.  
 13. Do not commit temporary or unnecessary files.  
 14. Maintain a `changelog.md` file to track all major changes.
-15. Use BTC price data from Binance public API (no auth required) for additional market insight.
+15. Use BRTI price data from CF Benchmarks WebSocket (`wss://www.cfbenchmarks.com/ws/v4`) as the primary BTC price source — it is the official Kalshi settlement feed.
 16. Make sure that agent implementation is doing all the heavy lifting and logging. Claude only needs to periodically check the correctness of the system based on the log analysis.
 17. **After every code change, update `design.md` and `CLAUDE.md` to reflect the new behavior.** `design.md` documents architecture and implementation decisions; `CLAUDE.md` documents the active trading strategy and coding standards.
 
@@ -34,7 +34,7 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
 
 ## Trading Strategy
 
-1. Trade exclusively on **`KXBTC15M` Bitcoin 15-minute price-direction markets**. Each market resolves YES if BTC closes the 15-minute window above its opening price, NO if below. Do not trade any other market type.
+1. Trade exclusively on **`KXBTC15M` Bitcoin 15-minute price-direction markets**. Exact resolution: YES if the **60-second BRTI average before close** ≥ the **60-second BRTI average before open** of the 15-minute window (`floor_strike`). Do not trade any other market type.
 2. Only trade during the **final 60 seconds** of a 15-minute window (the settlement window). Entering at the start of BRTI averaging gives the most information about the outcome. A 5-second floor ensures there is time for an IOC order to execute.
 3. **Entry**: YES ask **> 90¢** — buy immediately on the first qualifying tick (IOC order). No confirmation window.
 4. **Exit** (evaluated in priority order on each tick):
@@ -43,8 +43,13 @@ Check `todo.md` at the start of each session for items requiring follow-up verif
    - 70¢ < bid ≤ 80¢ AND blended win probability ≥ 85% → hold (probability guard blocks exit).
    - 70¢ < bid ≤ 80¢ AND blended win probability < 85% → require **3 consecutive ticks**, then sell at bid.
    - bid > 80¢ → hold.
-5. **Win probability**: `0.7 × BTC Gaussian model + 0.3 × Kalshi market mid`. The Gaussian model: `Φ(priceChangeFraction / (0.0001424 × √secondsRemaining))`, calibrated from 80% annual BTC volatility. The market mid captures institutional flow not reflected in raw price change.
-6. Strategy is **event-driven via WebSocket**: single connection to `wss://api.elections.kalshi.com/trade-api/ws/v2`. Entry/exit evaluated on every WS ticker update. BTC price polled from Binance every 5s; market discovery every 30s; balance corrected every 10s; full reconciliation every 15s.
+5. **Win probability**: `0.7 × Gaussian model + 0.3 × Kalshi market mid`.
+   - **Gaussian model**: `Φ(priceChangeFraction / (σ_eff × √secondsLeft) + score × 1.5)`
+   - `priceChangeFraction = (currentBRTI − floor_strike) / floor_strike`
+   - **σ_eff** priority: (1) interval realized vol from BRTI log-returns since `closeTime − 15min` (needs ≥10 returns, clamped [0.5σ, 3σ]); (2) 30-tick momentum dynamic sigma; (3) static `0.0001424` (80% annual vol).
+   - **Settlement window** (final 60s): model projects the expected 60-second closing average from accumulated BRTI samples and remaining seconds. Confidence sharpens as samples accumulate.
+   - Market mid captures institutional flow not reflected in raw price change.
+6. Strategy is **event-driven via WebSocket**: single connection to `wss://api.elections.kalshi.com/trade-api/ws/v2`. BRTI ticks arrive from CF Benchmarks WS every 1s; market discovery every 30s; balance corrected every 10s; full reconciliation every 15s.
 7. Track the full history of trades to analyze performance and improve the strategy over time.
 8. **Budget: $10 per 15-minute window** (constant). Size each trade at `min($10, available cash) / ask`. Stop trading if account balance drops to zero.
 

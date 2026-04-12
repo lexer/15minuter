@@ -1,4 +1,4 @@
-import { BtcProbabilityModel } from '../../src/services/BtcProbabilityModel';
+import { BtcProbabilityModel, SIGMA_PER_SQRT_SECOND } from '../../src/services/BtcProbabilityModel';
 
 describe('BtcProbabilityModel', () => {
   let model: BtcProbabilityModel;
@@ -70,6 +70,54 @@ describe('BtcProbabilityModel', () => {
       // σ(300) = 0.0001424 * sqrt(300) ≈ 0.00247; for prob>90%: z > 1.28 → change > 0.32%
       expect(model.calculate(0.0034, 300)).toBeGreaterThan(0.90); // 0.34% change → clearly >90%
       expect(model.calculate(0.001,  300)).toBeLessThan(0.90);    // 0.1% change → ~66%, not tradeable
+    });
+  });
+
+  describe('computeSigmaFromPrices: interval realized volatility', () => {
+    it('returns null for fewer than 11 prices', () => {
+      const prices = Array(10).fill(80000);
+      expect(model.computeSigmaFromPrices(prices)).toBeNull();
+    });
+
+    it('returns a value for 11+ prices with non-zero variance', () => {
+      // Prices oscillating by ~0.01% per tick — should give a reasonable sigma
+      const base = 80000;
+      const prices = Array.from({ length: 30 }, (_, i) => base + (i % 2 === 0 ? 8 : -8));
+      const sigma = model.computeSigmaFromPrices(prices);
+      expect(sigma).not.toBeNull();
+      expect(sigma!).toBeGreaterThan(0);
+    });
+
+    it('clamps very low vol to 0.5x static sigma', () => {
+      // Constant price → zero variance → clamped to 0.5 × SIGMA_PER_SQRT_SECOND
+      const prices = Array(30).fill(80000);
+      const sigma = model.computeSigmaFromPrices(prices);
+      expect(sigma).not.toBeNull();
+      expect(sigma!).toBeCloseTo(SIGMA_PER_SQRT_SECOND * 0.5, 8);
+    });
+
+    it('clamps very high vol to 3x static sigma', () => {
+      // Extreme oscillation → clamped to 3 × SIGMA_PER_SQRT_SECOND
+      const prices = [80000, 79000, 80000, 79000, 80000, 79000, 80000, 79000,
+                      80000, 79000, 80000, 79000, 80000, 79000, 80000];
+      const sigma = model.computeSigmaFromPrices(prices);
+      expect(sigma!).toBeCloseTo(SIGMA_PER_SQRT_SECOND * 3, 8);
+    });
+
+    it('higher interval vol reduces confidence for same price lead', () => {
+      const priceChangeFraction = 0.003; // +0.3% above threshold
+      const secondsLeft = 60;
+
+      // Low-vol interval: prices tightly clustered
+      const lowVolPrices  = Array.from({ length: 60 }, (_, i) => 80000 + i * 0.01);
+      // High-vol interval: prices oscillating ±0.5%
+      const highVolPrices = Array.from({ length: 60 }, (_, i) => 80000 + (i % 2 === 0 ? 400 : -400));
+
+      const probLowVol  = model.calculate(priceChangeFraction, secondsLeft, lowVolPrices);
+      const probHighVol = model.calculate(priceChangeFraction, secondsLeft, highVolPrices);
+
+      // Lower vol → sharper distribution → higher confidence for same lead
+      expect(probLowVol).toBeGreaterThan(probHighVol);
     });
   });
 
