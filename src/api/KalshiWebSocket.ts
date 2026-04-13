@@ -6,11 +6,13 @@ import { EventEmitter } from 'events';
 const WS_URL  = 'wss://api.elections.kalshi.com/trade-api/ws/v2';
 const WS_PATH = '/trade-api/ws/v2';
 
-const INITIAL_RECONNECT_MS = 1_000;
+const INITIAL_RECONNECT_MS = 100;     // reconnect fast; exponential backoff after
 const MAX_RECONNECT_MS     = 30_000;
-// Kalshi sends heartbeat pings every 10s; 90s = 9 missed beats before declaring dead.
-// 45s caused false reconnects at 15-min window boundaries when Kalshi WS goes quiet.
+// 90s watchdog — only fires if both server pings AND our keepalive pings go unanswered.
 const WATCHDOG_MS          = 90_000;
+// Send client-side ping every 30s to keep the connection alive when Kalshi goes quiet
+// between 15-minute windows (which would otherwise trigger the watchdog).
+const KEEPALIVE_MS         = 30_000;
 
 // ── Message types ─────────────────────────────────────────────────────────────
 
@@ -66,6 +68,7 @@ export class KalshiWebSocket extends EventEmitter {
   private socket:           WebSocket | null = null;
   private reconnectDelay    = INITIAL_RECONNECT_MS;
   private watchdogTimer:    ReturnType<typeof setTimeout>  | null = null;
+  private keepaliveTimer:   ReturnType<typeof setInterval> | null = null;
   private readonly subscribedTickers = new Set<string>();
   private cmdId   = 1;
   private running = false;
@@ -124,7 +127,8 @@ export class KalshiWebSocket extends EventEmitter {
   // ── Private helpers ─────────────────────────────────────────────────────────
 
   private clearHeartbeat(): void {
-    if (this.watchdogTimer) { clearTimeout(this.watchdogTimer); this.watchdogTimer = null; }
+    if (this.watchdogTimer)  { clearTimeout(this.watchdogTimer);   this.watchdogTimer  = null; }
+    if (this.keepaliveTimer) { clearInterval(this.keepaliveTimer); this.keepaliveTimer = null; }
   }
 
   private resetWatchdog(ws: WebSocket): void {
@@ -137,8 +141,15 @@ export class KalshiWebSocket extends EventEmitter {
 
   private startHeartbeat(ws: WebSocket): void {
     this.resetWatchdog(ws);
-    // Kalshi sends ping frames every 10s; reset watchdog on each one
+    // Reset watchdog on any inbound server frame (ping or message)
     ws.on('ping', () => this.resetWatchdog(ws));
+    // Reset watchdog on pong replies to our keepalive pings
+    ws.on('pong', () => this.resetWatchdog(ws));
+    // Send client-side ping every 30s — Kalshi goes quiet between windows,
+    // so we probe the connection ourselves to avoid false watchdog fires.
+    this.keepaliveTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.ping();
+    }, KEEPALIVE_MS);
   }
 
   private sign(timestamp: number): string {
