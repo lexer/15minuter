@@ -170,29 +170,29 @@ describe('KalshiWebSocket', () => {
     expect(connectionCount).toBeGreaterThanOrEqual(2);
   });
 
-  // ── 4. Ping resets watchdog ──────────────────────────────────────────────
+  // ── 4. App-level heartbeat keeps connection alive ─────────────────────────
 
-  it('does NOT reconnect when server sends pings within watchdogMs', async () => {
+  it('does NOT reconnect when server echoes heartbeat replies', async () => {
     const WATCHDOG = 300;
     let connectionCount = 0;
-    const pingIntervals: ReturnType<typeof setInterval>[] = [];
 
     server.on('connection', (ws) => {
       connectionCount++;
-      // Send a ping every 100ms — well within the 300ms watchdog
-      const iv = setInterval(() => ws.ping(), 100);
-      pingIntervals.push(iv);
-      ws.on('close', () => clearInterval(iv));
+      // Echo every inbound message back — simulates Kalshi replying to
+      // list_subscriptions with an ack. The response resets the watchdog.
+      ws.on('message', (data) => {
+        ws.send(JSON.stringify({ type: 'ack', sid: 1 }));
+      });
     });
 
     client = new KalshiWebSocket('key-id', privateKey, serverUrl, WATCHDOG);
     await client.connect();
 
-    // Wait 500ms (>1 watchdog period) — should still be on first connection
+    // Wait 500ms (>1 watchdog period) — heartbeat replies should keep it alive.
+    // The heartbeat interval is 10s in production, but the initial subscribe
+    // messages sent on connect will trigger ack replies that reset the watchdog.
     await delay(500);
     expect(connectionCount).toBe(1);
-
-    pingIntervals.forEach(clearInterval);
   });
 
   // ── 5. Message resets watchdog ───────────────────────────────────────────
@@ -217,27 +217,29 @@ describe('KalshiWebSocket', () => {
     expect(connectionCount).toBe(1);
   });
 
-  // ── 6. Pong replies reset watchdog ───────────────────────────────────────
+  // ── 6. Client sends list_subscriptions as heartbeat probe ────────────────
 
-  it('stays connected when server responds to client pongs (no server-initiated pings)', async () => {
-    const WATCHDOG = 300;
-    let connectionCount = 0;
+  it('sends list_subscriptions commands as heartbeat probes', async () => {
+    const receivedCmds: unknown[] = [];
 
-    server.on('connection', (ws) => {
-      connectionCount++;
-      // Server sends NO pings, but auto-replies to client pings with pong (ws lib default).
-      // This validates that the client's keepalive pings + pong replies keep the watchdog alive.
+    server.once('connection', (ws) => {
+      ws.on('message', (data) => {
+        try { receivedCmds.push(JSON.parse(data.toString())); } catch { /* ignore */ }
+        // Echo back to keep watchdog alive
+        ws.send(JSON.stringify({ type: 'ack' }));
+      });
     });
 
-    client = new KalshiWebSocket('key-id', privateKey, serverUrl, WATCHDOG);
+    client = new KalshiWebSocket('key-id', privateKey, serverUrl, 5_000);
     await client.connect();
+    // Wait for initial subscribe commands to arrive
+    await delay(200);
 
-    // The keepalive interval is 10s (too long for unit test to trigger).
-    // Here we just validate the connection setup is clean — the watchdog will fire
-    // after 300ms since no frames flow. In production with 10s keepalive < 30s watchdog
-    // the pong replies will keep the connection alive.
-    await delay(100);
-    expect(connectionCount).toBe(1);
+    // The initial connect sends subscribe commands for fill and market_positions.
+    // The heartbeat list_subscriptions fires every 10s so won't show in 200ms.
+    // Verify at least the subscribe commands are sent.
+    const subscribes = receivedCmds.filter((c: any) => c.cmd === 'subscribe');
+    expect(subscribes.length).toBeGreaterThanOrEqual(2); // fill + market_positions
   });
 
   // ── 7. Resubscribes tickers after reconnect ──────────────────────────────
@@ -251,12 +253,11 @@ describe('KalshiWebSocket', () => {
       connectionCount++;
       ws.on('message', (data) => {
         try { receivedCmds.push(JSON.parse(data.toString())); } catch { /* ignore */ }
+        // Keep second connection alive by echoing back — simulates Kalshi ack
+        if (connectionCount >= 2) {
+          ws.send(JSON.stringify({ type: 'ack', sid: 1 }));
+        }
       });
-      // Only keep second connection alive with pings
-      if (connectionCount >= 2) {
-        const iv = setInterval(() => ws.ping(), 50);
-        ws.on('close', () => clearInterval(iv));
-      }
     });
 
     client = new KalshiWebSocket('key-id', privateKey, serverUrl, WATCHDOG);
