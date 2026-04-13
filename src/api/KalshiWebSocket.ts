@@ -12,8 +12,9 @@ const MAX_RECONNECT_MS     = 30_000;
 // The only way to detect a dead connection is via application-level messages.
 // We send a periodic `list_subscriptions` command as a heartbeat probe — Kalshi replies
 // with an ack, resetting the watchdog. If the connection is dead, no reply comes and
-// the watchdog fires.
-const WATCHDOG_MS          = 30_000;
+// the watchdog fires. Set to 45s: tight enough to catch real drops quickly, but wide
+// enough to absorb the natural ~30s idle windows between 15-min market transitions.
+const WATCHDOG_MS          = 45_000;
 // Application-level heartbeat: send a list_subscriptions command every 10s.
 // Kalshi's reply resets the watchdog, proving the connection is alive.
 const HEARTBEAT_MS         = 10_000;

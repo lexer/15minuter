@@ -44,7 +44,7 @@ Two-layer approach to maintain the Kalshi WS connection:
 
 1. **Application-level heartbeat every 10s** — Kalshi's WS server does **not** send WebSocket-level ping frames and does **not** reply to client ping frames (despite their documentation claiming 10s server pings). The only reliable liveness signal is an application-level response. We send a `list_subscriptions` command every 10s; Kalshi replies with an ack message that resets the watchdog. This keeps the connection alive during quiet periods between 15-minute windows when no market data is flowing.
 
-2. **30s inactivity watchdog** — resets on any inbound message (including heartbeat ack replies and ticker data). If no response arrives within 30s (3 missed heartbeat cycles), the connection is dead. Terminate and reconnect.
+2. **45s inactivity watchdog** — resets on any inbound message (including heartbeat ack replies and ticker data). If no response arrives within 45s (~4 missed heartbeat cycles), the connection is dead. Terminate and reconnect. Set to 45s rather than 30s because Kalshi may not always reply to `list_subscriptions` during market transitions, causing ~30s natural idle periods that would otherwise trigger false reconnects.
 
 3. **401 retry on reconnect** — Kalshi occasionally returns HTTP 401 during WebSocket handshake due to transient timestamp skew. On 401, we immediately retry with a fresh RSA-PSS signature (up to 2 attempts) before falling back to exponential backoff. This avoids the previous behavior where 401 was treated like a generic error and delayed reconnection by seconds.
 
