@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.30.0] — 2026-04-13
+
+### Fixed
+- **WebSocket keepalive**: Kalshi's WS server does not send ping frames and does not reply to client ping frames (despite documentation). Replaced `ws.ping()` keepalive with application-level heartbeat: `list_subscriptions` command every 10s. Kalshi replies with an ack message that resets the watchdog. Eliminates recurring watchdog timeouts during idle periods between 15-minute windows.
+- **Watchdog reduced from 90s to 30s**: faster detection of genuinely dead connections (3 missed heartbeats).
+- **401 retry on WS handshake**: 401 errors caused by transient timestamp skew now trigger immediate retry with a fresh RSA-PSS signature (up to 2 attempts) before falling back to exponential backoff. Previously, 401 was treated as a generic error, delaying reconnection.
+
+### Tests
+- `KalshiWebSocket.test.ts`: replaced ping-based watchdog tests with application-level heartbeat tests; added server-echo-ack test for connection stability.
+
 ## [1.29.0] — 2026-04-12
 
 ### Changed

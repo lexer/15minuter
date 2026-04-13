@@ -14,7 +14,7 @@ Process isolation: all files use the `btc_` prefix (`btc_agent.pid`, `btc_agent_
 src/
   api/
     KalshiClient.ts        — RSA-PSS authenticated HTTP client for Kalshi REST API
-    KalshiWebSocket.ts     — Multiplexed WS (ticker + fill + market_positions); 45s watchdog
+    KalshiWebSocket.ts     — Multiplexed WS (ticker + fill + market_positions); 30s watchdog + 10s heartbeat
     types.ts               — Kalshi API types
   services/
     BtcPriceMonitor.ts     — CF Benchmarks BRTI WebSocket (1s ticks); rolling 20-min price history
@@ -42,11 +42,13 @@ Kalshi requires RSA-PSS signatures. Message: `{timestamp_ms}{METHOD}{/trade-api/
 ### 2. WebSocket Keep-Alive and Watchdog
 Two-layer approach to maintain the Kalshi WS connection:
 
-1. **Client-side keepalive ping every 30s** — `ws.ping()` is sent on an interval. Kalshi responds with a pong frame, which resets the watchdog. This keeps the connection alive during quiet periods between 15-minute windows (when Kalshi stops sending server pings), preventing false watchdog fires.
+1. **Application-level heartbeat every 10s** — Kalshi's WS server does **not** send WebSocket-level ping frames and does **not** reply to client ping frames (despite their documentation claiming 10s server pings). The only reliable liveness signal is an application-level response. We send a `list_subscriptions` command every 10s; Kalshi replies with an ack message that resets the watchdog. This keeps the connection alive during quiet periods between 15-minute windows when no market data is flowing.
 
-2. **90s inactivity watchdog** — resets on any inbound frame (server ping, pong reply, message). Only fires if both Kalshi's server pings and all 3 of our own keepalive pings go completely unanswered — a true dead connection.
+2. **30s inactivity watchdog** — resets on any inbound message (including heartbeat ack replies and ticker data). If no response arrives within 30s (3 missed heartbeat cycles), the connection is dead. Terminate and reconnect.
 
-3. **Fast reconnect** — first attempt at 100ms (down from 1000ms), then exponential backoff capped at 30s. Ensures < 1s data gap on genuine disconnects.
+3. **401 retry on reconnect** — Kalshi occasionally returns HTTP 401 during WebSocket handshake due to transient timestamp skew. On 401, we immediately retry with a fresh RSA-PSS signature (up to 2 attempts) before falling back to exponential backoff. This avoids the previous behavior where 401 was treated like a generic error and delayed reconnection by seconds.
+
+4. **Fast reconnect** — first attempt at 200ms, then exponential backoff capped at 30s. Ensures < 1s data gap on genuine disconnects.
 
 ### 3. BTC Price Data — CF Benchmarks BRTI
 `BtcPriceMonitor` connects to the CF Benchmarks BRTI WebSocket (`wss://www.cfbenchmarks.com/ws/v4`).
