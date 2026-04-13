@@ -6,13 +6,21 @@ import { EventEmitter } from 'events';
 const WS_URL  = 'wss://api.elections.kalshi.com/trade-api/ws/v2';
 const WS_PATH = '/trade-api/ws/v2';
 
-const INITIAL_RECONNECT_MS = 100;     // reconnect fast; exponential backoff after
+const INITIAL_RECONNECT_MS = 200;     // reconnect fast; exponential backoff after
 const MAX_RECONNECT_MS     = 30_000;
-// 90s watchdog — only fires if both server pings AND our keepalive pings go unanswered.
-const WATCHDOG_MS          = 90_000;
-// Send client-side ping every 30s to keep the connection alive when Kalshi goes quiet
-// between 15-minute windows (which would otherwise trigger the watchdog).
-const KEEPALIVE_MS         = 30_000;
+// Kalshi sends server pings every 10s. If we receive neither a server ping, a pong
+// reply to our keepalive, nor any application message for 30s, the connection is dead.
+const WATCHDOG_MS          = 30_000;
+// Send client-side ping every 10s — matches Kalshi's own heartbeat interval.
+// This ensures we detect dead connections quickly even when no market data is flowing.
+const KEEPALIVE_MS         = 10_000;
+// If no pong is received within this window after a client ping, the connection is
+// silently dead (e.g. TCP half-open). Terminate immediately instead of waiting for
+// the full watchdog timeout.
+const PONG_TIMEOUT_MS      = 15_000;
+// Maximum retries on 401 during WS handshake before falling back to backoff.
+// 401 can be caused by transient timestamp skew — a fresh signature often succeeds.
+const MAX_AUTH_RETRIES     = 2;
 
 // ── Message types ─────────────────────────────────────────────────────────────
 
@@ -69,9 +77,11 @@ export class KalshiWebSocket extends EventEmitter {
   private reconnectDelay    = INITIAL_RECONNECT_MS;
   private watchdogTimer:    ReturnType<typeof setTimeout>  | null = null;
   private keepaliveTimer:   ReturnType<typeof setInterval> | null = null;
+  private pongTimer:        ReturnType<typeof setTimeout>  | null = null;
   private readonly subscribedTickers = new Set<string>();
   private cmdId   = 1;
   private running = false;
+  private authRetries = 0;
 
   constructor(
     private readonly keyId:       string,
@@ -129,6 +139,7 @@ export class KalshiWebSocket extends EventEmitter {
   private clearHeartbeat(): void {
     if (this.watchdogTimer)  { clearTimeout(this.watchdogTimer);   this.watchdogTimer  = null; }
     if (this.keepaliveTimer) { clearInterval(this.keepaliveTimer); this.keepaliveTimer = null; }
+    if (this.pongTimer)      { clearTimeout(this.pongTimer);       this.pongTimer      = null; }
   }
 
   private resetWatchdog(ws: WebSocket): void {
@@ -141,14 +152,35 @@ export class KalshiWebSocket extends EventEmitter {
 
   private startHeartbeat(ws: WebSocket): void {
     this.resetWatchdog(ws);
+
     // Reset watchdog on any inbound server frame (ping or message)
-    ws.on('ping', () => this.resetWatchdog(ws));
-    // Reset watchdog on pong replies to our keepalive pings
-    ws.on('pong', () => this.resetWatchdog(ws));
-    // Send client-side ping every 30s — Kalshi goes quiet between windows,
-    // so we probe the connection ourselves to avoid false watchdog fires.
+    ws.on('ping', (data) => {
+      console.log(`[WS] Server ping received (${data.toString()})`);
+      this.resetWatchdog(ws);
+    });
+
+    // Reset watchdog on pong replies to our keepalive pings.
+    // Cancel the pong timeout — the connection is alive.
+    ws.on('pong', () => {
+      if (this.pongTimer) { clearTimeout(this.pongTimer); this.pongTimer = null; }
+      this.resetWatchdog(ws);
+    });
+
+    // Send client-side ping every 10s — matches Kalshi's server heartbeat interval.
+    // Between 15-min windows the server may not send application messages, so proactive
+    // pinging is the only way to detect dead connections quickly.
     this.keepaliveTimer = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.ping();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+        // Start a pong timeout: if no pong comes back within PONG_TIMEOUT_MS the
+        // TCP connection is silently dead (half-open). Kill it immediately.
+        if (!this.pongTimer) {
+          this.pongTimer = setTimeout(() => {
+            console.error(`[WS] Pong timeout — no pong received within ${PONG_TIMEOUT_MS / 1000}s, connection dead`);
+            ws.terminate();
+          }, PONG_TIMEOUT_MS);
+        }
+      }
     }, KEEPALIVE_MS);
   }
 
@@ -187,6 +219,7 @@ export class KalshiWebSocket extends EventEmitter {
       ws.once('open', () => {
         console.log('[WS] Connected');
         this.reconnectDelay = INITIAL_RECONNECT_MS;
+        this.authRetries    = 0;
         this.startHeartbeat(ws);
 
         // Subscribe to fill and market_positions channels immediately
@@ -228,7 +261,27 @@ export class KalshiWebSocket extends EventEmitter {
       });
 
       ws.on('error', (err) => {
-        console.error(`[WS] Error: ${err.message}`);
+        const is401 = err.message.includes('401');
+        if (is401 && this.authRetries < MAX_AUTH_RETRIES) {
+          // 401 during handshake is likely transient timestamp skew.
+          // Retry immediately with a fresh signature instead of using backoff.
+          this.authRetries++;
+          console.warn(`[WS] 401 on handshake — retrying with fresh signature (attempt ${this.authRetries}/${MAX_AUTH_RETRIES})`);
+          // The close event will fire after this error; prevent it from scheduling
+          // a normal backoff reconnect by replacing the handler for this one cycle.
+          ws.removeAllListeners('close');
+          ws.on('close', () => {
+            this.clearHeartbeat();
+            this.socket = null;
+            if (this.running) {
+              // Small delay to let the timestamp advance, then retry
+              setTimeout(() => { void this.openSocket(); }, 500);
+            }
+            done();
+          });
+        } else {
+          console.error(`[WS] Error: ${err.message}`);
+        }
         done();
       });
     });
