@@ -56,6 +56,8 @@ Two-layer approach to maintain the Kalshi WS connection:
 - KXBTC15M markets resolve on the **60-second simple average** of BRTI immediately before close vs the **60-second simple average** of BRTI immediately before the window opened (`floor_strike`).
 - The monitor maintains a **rolling 20-minute price history** (cleared on disconnect) used by the probability model to compute realized interval volatility.
 - Credentials (WS key ID + password) are scraped from the CF Benchmarks BRTI page and refreshed every 15 minutes.
+- **On disconnect**: `latestPrice` and `latestTime` are set to `null` so `getBtcState()` returns `null` while the feed is down — prevents the agent from trading on stale price data.
+- **30s data watchdog**: starts on every `open` event; resets on each received BRTI value. If no value arrives within 30s (silent subscription failure from stale credentials), forces a credential refresh and reconnect. The `refreshCredentials(forceReconnect=true)` path always reconnects, even if the fetched credentials are unchanged.
 
 ### 4. BTC Probability Model — Gaussian Random Walk with Interval Realized Vol
 ```

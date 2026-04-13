@@ -20,9 +20,13 @@ const BRTI_WS_URL         = 'wss://www.cfbenchmarks.com/ws/v4';
 const BRTI_PAGE_DATA_URL  = 'https://www.cfbenchmarks.com/_next/data/{BUILD_ID}/data/indices/BRTI.json';
 const BRTI_PAGE_URL       = 'https://www.cfbenchmarks.com/data/indices/BRTI';
 
-const MAX_RECONNECT_DELAY_MS    = 30_000;
-const CREDENTIAL_REFRESH_MS     = 15 * 60 * 1_000; // 15 minutes
-const PRICE_HISTORY_MAX_MS      = 20 * 60 * 1_000; // keep 20 min of BRTI ticks
+const MAX_RECONNECT_DELAY_MS = 30_000;
+const CREDENTIAL_REFRESH_MS  = 15 * 60 * 1_000; // 15 minutes
+const PRICE_HISTORY_MAX_MS   = 20 * 60 * 1_000; // keep 20 min of BRTI ticks
+// If no BRTI value arrives within 30s of connecting, the subscription silently
+// failed (e.g. stale credentials accepted the TCP handshake but not the feed).
+// Force a credential refresh + reconnect to recover.
+const DATA_WATCHDOG_MS       = 30_000;
 
 export interface BrtiState {
   currentPrice: number;
@@ -50,9 +54,10 @@ export class BtcPriceMonitor {
   private readonly indicators = new BtcMomentumIndicators();
   /** Rolling buffer of timestamped BRTI prices — last 20 minutes. Cleared on WS reconnect. */
   private readonly priceHistory: Array<{ price: number; ts: number }> = [];
-  private ws:             WebSocket | null = null;
-  private reconnectTimer:   ReturnType<typeof setTimeout> | null = null;
+  private ws:               WebSocket | null = null;
+  private reconnectTimer:   ReturnType<typeof setTimeout>  | null = null;
   private credRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private dataWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1_000;
   private running = false;
   private credentials: BrtiCredentials | null = null;
@@ -72,8 +77,9 @@ export class BtcPriceMonitor {
   /** Disconnect and cancel all timers. */
   stop(): void {
     this.running = false;
-    if (this.reconnectTimer)   { clearTimeout(this.reconnectTimer);   this.reconnectTimer   = null; }
-    if (this.credRefreshTimer) { clearInterval(this.credRefreshTimer); this.credRefreshTimer = null; }
+    if (this.reconnectTimer)    { clearTimeout(this.reconnectTimer);    this.reconnectTimer    = null; }
+    if (this.credRefreshTimer)  { clearInterval(this.credRefreshTimer); this.credRefreshTimer  = null; }
+    if (this.dataWatchdogTimer) { clearTimeout(this.dataWatchdogTimer); this.dataWatchdogTimer = null; }
     if (this.ws) {
       this.ws.removeAllListeners();
       this.ws.close();
@@ -83,8 +89,8 @@ export class BtcPriceMonitor {
 
   /**
    * Returns the latest BRTI price received from the WebSocket.
-   * Returns null if no price has been received yet — callers should not trade
-   * until a valid BRTI price is available.
+   * Returns null if no price has been received yet, or after a disconnect —
+   * callers should not trade until a valid BRTI price is available.
    */
   async getBtcState(): Promise<BrtiState | null> {
     if (this.latestPrice !== null && this.latestTime !== null) {
@@ -115,8 +121,11 @@ export class BtcPriceMonitor {
   /**
    * Scrapes ws credentials from the CF Benchmarks BRTI Next.js page.
    * The page embeds wsApiKeyId + wsApiKeyPassword in its server-side props.
+   *
+   * @param forceReconnect — if true, reconnect even if credentials haven't changed.
+   *   Used by the data watchdog when the connection is alive but delivering no data.
    */
-  private async refreshCredentials(): Promise<void> {
+  private async refreshCredentials(forceReconnect = false): Promise<void> {
     try {
       // Step 1: get the current Next.js buildId from the HTML page
       const htmlResp = await fetch(BRTI_PAGE_URL, {
@@ -144,7 +153,7 @@ export class BtcPriceMonitor {
 
       this.credentials = { wsApiKeyId, wsApiKeyPassword };
 
-      if (changed) {
+      if (changed || forceReconnect) {
         console.log('[BrtiMonitor] Credentials refreshed — reconnecting');
         this.reconnect();
       }
@@ -163,6 +172,7 @@ export class BtcPriceMonitor {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearDataWatchdog();
     // Reset momentum and price history — stale data from before disconnection is unreliable
     this.indicators.reset();
     this.latestMomentum = null;
@@ -187,6 +197,10 @@ export class BtcPriceMonitor {
       this.reconnectDelay = 1_000;
       ws.send(JSON.stringify({ type: 'subscribe', id: 'BRTI', stream: 'value' }));
       console.log('[BrtiMonitor] Connected — subscribed to BRTI value stream');
+      // Start data watchdog: if no BRTI value arrives within 30s the subscription
+      // silently failed (stale credentials accepted TCP but not the data feed).
+      // Force a credential refresh + reconnect to recover.
+      this.startDataWatchdog();
     });
 
     ws.on('message', (data: Buffer) => {
@@ -197,6 +211,8 @@ export class BtcPriceMonitor {
           this.latestPrice     = price;
           this.latestTime      = new Date(msg.time);
           this.latestMomentum  = this.indicators.update(price);
+          // Reset the data watchdog — we got live data, connection is healthy
+          this.resetDataWatchdog();
           // Append to rolling history and prune entries older than 20 minutes
           this.priceHistory.push({ price, ts: msg.time });
           const cutoff = msg.time - PRICE_HISTORY_MAX_MS;
@@ -209,8 +225,15 @@ export class BtcPriceMonitor {
 
     ws.on('close', () => {
       if (!this.running) return;
+      this.clearDataWatchdog();
+      // Null out cached price so getBtcState() returns null while disconnected.
+      // This prevents the agent from trading on stale price data.
+      this.latestPrice    = null;
+      this.latestTime     = null;
+      this.latestMomentum = null;
       // Clear price history on disconnect — gaps in the feed make log-returns unreliable
       this.priceHistory.length = 0;
+      this.indicators.reset();
       const delay = this.reconnectDelay;
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
       console.warn(`[BrtiMonitor] Disconnected — reconnecting in ${delay}ms`);
@@ -223,5 +246,33 @@ export class BtcPriceMonitor {
     ws.on('error', (err: Error) => {
       console.warn('[BrtiMonitor] WS error:', err.message);
     });
+  }
+
+  // ── Data watchdog ─────────────────────────────────────────────────────────────
+
+  private startDataWatchdog(): void {
+    this.clearDataWatchdog();
+    this.dataWatchdogTimer = setTimeout(() => {
+      this.dataWatchdogTimer = null;
+      console.error(
+        `[BrtiMonitor] Data watchdog: no BRTI data for ${DATA_WATCHDOG_MS / 1000}s after connect` +
+        ' — forcing credential refresh and reconnect',
+      );
+      void this.refreshCredentials(true);
+    }, DATA_WATCHDOG_MS);
+  }
+
+  private resetDataWatchdog(): void {
+    if (this.dataWatchdogTimer) {
+      clearTimeout(this.dataWatchdogTimer);
+      this.startDataWatchdog();
+    }
+  }
+
+  private clearDataWatchdog(): void {
+    if (this.dataWatchdogTimer) {
+      clearTimeout(this.dataWatchdogTimer);
+      this.dataWatchdogTimer = null;
+    }
   }
 }
